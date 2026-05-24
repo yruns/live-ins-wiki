@@ -538,6 +538,106 @@ class StaticContractTest(unittest.TestCase):
         self.assertIn("| wiki/concepts/revenue-bundles | Revenue \\| bundles | 2 | 2026-05-25 | reviewed |", overview.stdout)
         self.assertIn("| wiki/overviews/revenue-feature-portfolio | Feature portfolio | 2 | 2026-05-25 | unreviewed |", overview.stdout)
 
+    def test_index_upsert_replaces_markdown_link_page_key(self) -> None:
+        sample = """
+# INDEX
+
+## Concepts
+
+| Page | Summary | Source Count | Last Updated | Review State |
+| --- | --- | --- | --- | --- |
+| [wiki/concepts/revenue-bundles](https://bytedance.larkoffice.com/wiki/node) | Old concept | 1 | 2026-05-24 | unreviewed |
+"""
+        result = subprocess.run(
+            [
+                "python3",
+                "scripts/index_upsert.py",
+                "--section",
+                "Concepts",
+                "--key-column",
+                "Page",
+                "--page",
+                "wiki/concepts/revenue-bundles",
+                "--summary",
+                "New concept",
+                "--source-count",
+                "2",
+                "--last-updated",
+                "2026-05-25",
+                "--review-state",
+                "reviewed",
+            ],
+            cwd=ROOT,
+            input=sample,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        self.assertEqual(result.stdout.count("wiki/concepts/revenue-bundles"), 1)
+        self.assertNotIn("[wiki/concepts/revenue-bundles]", result.stdout)
+        self.assertIn("| wiki/concepts/revenue-bundles | New concept | 2 | 2026-05-25 | reviewed |", result.stdout)
+
+    def test_sheet_upsert_replaces_markdown_link_page_key(self) -> None:
+        command = r'''
+source scripts/lark_wiki.sh
+lark-cli() {
+  if [[ "$1" == "api" && "$2" == "GET" ]]; then
+    printf '{"data":{"sheets":[{"title":"Concepts","sheet_id":"s1"}]}}\n'
+    return 0
+  fi
+  if [[ "$1" == "sheets" && "$2" == "+read" ]]; then
+    printf '{"data":{"valueRange":{"values":[["Page","Summary","Source Count","Last Updated","Review State"],["[wiki/concepts/revenue-bundles](https://bytedance.larkoffice.com/wiki/node)","Old concept","1","2026-05-24","unreviewed"]]}}}\n'
+    return 0
+  fi
+  if [[ "$1" == "sheets" && "$2" == "+write" ]]; then
+    while [[ "$#" -gt 0 ]]; do
+      if [[ "$1" == "--values" ]]; then
+        printf '%s\n' "$2" >&2
+        return 0
+      fi
+      shift
+    done
+    return 0
+  fi
+  return 1
+}
+_lw_sheet_upsert_row fake_token Concepts Page \
+  '["Page","Summary","Source Count","Last Updated","Review State"]' \
+  '["wiki/concepts/revenue-bundles","New concept","2","2026-05-25","reviewed"]'
+'''
+        result = subprocess.run(
+            ["bash", "-lc", command],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        self.assertEqual(result.stderr.count("wiki/concepts/revenue-bundles"), 1)
+        self.assertNotIn("[wiki/concepts/revenue-bundles]", result.stderr)
+        self.assertIn("New concept", result.stderr)
+
+    def test_embedded_sheet_tokens_are_extracted_and_readers_expand_them(self) -> None:
+        command = r'''
+from lark_markdown import embedded_sheet_tokens
+print(",".join(embedded_sheet_tokens('before <sheet token="sht123"></sheet> middle <sheet token=sht456> after <sheet token="sht123">')))
+'''
+        result = subprocess.run(
+            ["python3", "-c", command],
+            cwd=ROOT / "scripts",
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        script = read("scripts/lark_wiki.sh")
+        workflows = read("references/workflows.md")
+        schema = read("references/schema.md")
+        self.assertEqual(result.stdout.strip(), "sht123,sht456")
+        self.assertIn("_lw_truncated_cat_expand_embedded_sheets", script)
+        self.assertIn("_lw_sheet_dump_markdown", script)
+        self.assertIn("Embedded Sheet", script)
+        self.assertIn("内嵌 sheet", workflows)
+        self.assertIn("INDEX Page 列必须保存规范纯路径", schema)
+
     def test_wiki_registry_records_recent_wikis_and_resolves_current(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             record = [

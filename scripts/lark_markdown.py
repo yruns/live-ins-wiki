@@ -58,3 +58,29 @@ def normalize_lark_tables(text: str) -> str:
         return rendered if rendered else match.group(0)
 
     return re.sub(r"<lark-table\b[\s\S]*?</lark-table>", replace, text)
+
+
+def embedded_sheet_tokens(text: str) -> list[str]:
+    """Return unique sheet tokens referenced by Lark `<sheet token=...>` embeds."""
+
+    seen: set[str] = set()
+    tokens: list[str] = []
+    for match in re.finditer(r"<sheet\b[^>]*\btoken=(?:\"([^\"]+)\"|'([^']+)'|([^\s>]+))[^>]*>", text):
+        token = next(group for group in match.groups() if group)
+        if token not in seen:
+            seen.add(token)
+            tokens.append(token)
+    return tokens
+
+
+def canonical_ref_key(value: str) -> str:
+    """Normalize a ref cell to the logical key used by INDEX/SOURCES upserts."""
+
+    text = (value or "").strip().replace("<br>", "\n").split("\n", 1)[0].strip()
+    markdown = re.fullmatch(r"\[([^\]]+)\]\([^)]+\)", text)
+    if markdown:
+        return markdown.group(1).strip()
+    hyperlink = re.fullmatch(r"=?HYPERLINK\(\s*\"[^\"]+\"\s*,\s*\"([^\"]+)\"\s*\)", text, flags=re.I)
+    if hyperlink:
+        return hyperlink.group(1).strip()
+    return text

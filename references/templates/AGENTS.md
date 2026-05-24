@@ -25,7 +25,8 @@ This Wiki is a Lark/Feishu implementation of a Karpathy-style LLM Wiki. It store
 - Compile means claims are integrated into relevant `wiki/*` pages, `INDEX`, `SOURCES`, and `LOG`.
 - `INDEX` and `SOURCES` are table manifests; new or rebuilt Wikis must use Feishu spreadsheet sheets, with Markdown document tables only as legacy compatibility fallback.
 - Compile must keep `INDEX` directory rows synchronized with real `wiki/*` pages. Updating only the Sources row is incomplete.
-- After every compile, run `wiki-structure-lint`; `INDEX` sheet Page rows must exactly match real `wiki/*` directory children in both directions.
+- After every compile, run `wiki-structure-lint`; `INDEX` sheet Page rows must be canonical plain paths and exactly match real `wiki/*` directory children in both directions.
+- Main doc fetch does not expand embedded `<sheet token=...>` content. Read embedded sheets separately before compiling facts from documents that contain sheet embeds.
 - Full `wiki-health` is a heavier health audit and does not replace the per-compile structure lint gate.
 - All visible refs in tables and prose must be clickable links to the real Lark/Wiki/doc target.
 - Last-updated fields must be second-precision timestamps with timezone, not date-only values.

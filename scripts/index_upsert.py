@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from lark_markdown import normalize_lark_tables
+from lark_markdown import canonical_ref_key, normalize_lark_tables
 
 
 SOURCE_HEADERS = ["Page", "Source ID", "Type", "Summary", "Compiled Into", "Status", "Last Updated"]
@@ -166,7 +166,7 @@ def upsert(text: str, section: str, headers: list[str], key_column: str, values:
         section_end += 1
 
     key_index = headers.index(key_column)
-    key_value = values[key_column]
+    key_value = canonical_ref_key(values[key_column])
     row = render_row(values, headers)
     index = header_index + 2
     replaced = False
@@ -174,10 +174,10 @@ def upsert(text: str, section: str, headers: list[str], key_column: str, values:
         cells = split_row(lines[index])
         if not cells:
             break
-        if len(cells) > key_index and cells[key_index] == key_value and not replaced:
+        if len(cells) > key_index and canonical_ref_key(cells[key_index]) == key_value and not replaced:
             lines[index] = row
             replaced = True
-        elif len(cells) > key_index and cells[key_index] == key_value:
+        elif len(cells) > key_index and canonical_ref_key(cells[key_index]) == key_value:
             del lines[index]
             section_end -= 1
             continue

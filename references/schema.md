@@ -204,11 +204,11 @@ Passing mention 不建页，放在 source page 的 `Mentioned but not tracked`�
 
 Compile 创建或更新任何 `wiki/*` 编译页后，必须 upsert 对应 `INDEX` 行；只更新 Sources 不算目录同步完成。
 
-`INDEX` 的 Page、Compiled Into、Target Source 等 refs 列必须可点击，`Last Updated` 必须精确到秒。
+`INDEX` 的 Page 列必须保存规范纯路径（如 `wiki/concepts/foo`），这是 `wiki-structure-lint` 和 upsert 的主键；不要在 Page 列写 Markdown link 或其他展示型链接。换句话说，INDEX Page 列必须保存规范纯路径。Compiled Into、Target Source 等其他 refs 列必须可点击，`Last Updated` 必须精确到秒。
 
 `Compiled Into` 多值列必须使用换行分隔，避免一整串分号导致人工扫描和 agent diff 都变差。
 
-每次 Compile 后必须运行 `wiki-structure-lint` 做 `INDEX` catalog lint：`INDEX` 各 sheet 的 Page 列与真实 `wiki/<category>` 子节点必须双向完全一致。真实目录有但 INDEX 没有、INDEX 有但真实目录没有，都是结构错误。
+每次 Compile 后必须运行 `wiki-structure-lint` 做 `INDEX` catalog lint：`INDEX` 各 sheet 的 Page 列与真实 `wiki/<category>` 子节点必须双向完全一致。真实目录有但 INDEX 没有、INDEX 有但真实目录没有，都是结构错误。旧的 Markdown-link Page 值需要先规范化为纯路径再 upsert，否则会产生重复行。
 
 ## Graph / Backlink
 
