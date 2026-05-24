@@ -24,6 +24,8 @@ This Wiki is a Lark/Feishu implementation of a Karpathy-style LLM Wiki. It store
 - Import/Stage only means a source is recorded in `raw` and `SOURCES`; it is not compiled.
 - Compile means claims are integrated into relevant `wiki/*` pages, `INDEX`, `SOURCES`, and `LOG`.
 - `compiled_unverified` is the only allowed status before Coverage Audit completes.
+- `SOURCES.imported_at` is immutable; later state changes update `updated_at`.
+- `INDEX` source rows are upserted by `Source ID`, not appended as duplicates.
 - Destructive edits require a short write plan before execution.
 - Never write Lark access tokens, app secrets, cookies, auth headers, personal credentials, or debug secrets into Wiki pages, `SOURCES`, `INDEX`, or `LOG`.
 
@@ -108,7 +110,7 @@ Use index-first selective reading. Read `INDEX` and `SOURCES`, choose compiled p
 
 ## Health
 
-Run a low-cost structure check before semantic work: directories, `INDEX`, `SOURCES`, `LOG`, YAML frontmatter, `source_refs`, empty pages, duplicate titles, and manifest coverage.
+Run a low-cost structure check before semantic work: directories, `INDEX`, `SOURCES`, `LOG`, YAML frontmatter, `source_refs`, empty pages, duplicate titles, and manifest coverage. Missing YAML/frontmatter or `source_refs` in core compiled pages is a failure, as is `compile_status=compiled` without completed audit metadata.
 
 ## Semantic Lint
 

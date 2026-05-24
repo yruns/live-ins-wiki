@@ -96,9 +96,25 @@ _lw_escape_sed_replacement() {
 }
 
 _lw_source_id() {
-  local suffix
-  suffix="$(date +%H%M%S)"
-  printf 'SRC-%s-%s\n' "$(_lw_today)" "$suffix"
+  local wiki_root="${1:-}"
+  local root_parts space_id root_node sources_obj current next_id py
+  if [[ -n "$wiki_root" ]]; then
+    py="$(_lw_python)"
+    if [[ -n "$py" && -f "$LW_SCRIPT_DIR/source_id_next.py" ]]; then
+      if root_parts="$(_lw_wiki_root_parts "$wiki_root" 2>/dev/null)"; then
+        space_id="$(printf '%s\n' "$root_parts" | jq -r '.space_id')"
+        root_node="$(printf '%s\n' "$root_parts" | jq -r '.root_node')"
+        if sources_obj="$(_lw_wiki_child_obj "$space_id" "$root_node" "SOURCES" 2>/dev/null)"; then
+          current="$(lw_cat "$sources_obj" 2>/dev/null || true)"
+          if next_id="$(printf '%s\n' "$current" | "$py" "$LW_SCRIPT_DIR/source_id_next.py" --date "$(_lw_today)" 2>/dev/null)"; then
+            printf '%s\n' "$next_id"
+            return 0
+          fi
+        fi
+      fi
+    fi
+  fi
+  printf 'SRC-%s-%s-%04x\n' "$(_lw_today)" "$(date +%H%M%S)" "$RANDOM"
 }
 
 _lw_render_template() {
@@ -552,7 +568,7 @@ _lw_wiki_append_log() {
   } | lw_append "$log_obj" - >/dev/null
 }
 
-_lw_wiki_append_index_source() {
+_lw_wiki_upsert_index_source() {
   local space_id="$1"
   local root_node="$2"
   local page="$3"
@@ -560,11 +576,30 @@ _lw_wiki_append_index_source() {
   local kind="$5"
   local summary="$6"
   local status="$7"
-  local index_obj
+  local compiled_into="${8:--}"
+  local index_obj current updated py
   index_obj="$(_lw_wiki_child_obj "$space_id" "$root_node" "INDEX")" || return $?
-  printf '| %s | %s | %s | %s | - | %s | %s |\n' \
-    "$page" "$source_id" "$kind" "$summary" "$status" "$(_lw_today)" |
-    lw_append "$index_obj" - >/dev/null
+  py="$(_lw_python)"
+  [[ -n "$py" ]] || {
+    printf '缺少 python3，无法 upsert INDEX\n' >&2
+    return 127
+  }
+  current="$(lw_cat "$index_obj")"
+  updated="$(printf '%s\n' "$current" | "$py" "$LW_SCRIPT_DIR/index_upsert.py" \
+    --section Sources \
+    --key-column "Source ID" \
+    --page "$page" \
+    --source-id "$source_id" \
+    --type "$kind" \
+    --summary "$summary" \
+    --compiled-into "$compiled_into" \
+    --status "$status" \
+    --last-updated "$(_lw_today)")"
+  printf '%s\n' "$updated" | lw_write "$index_obj" - >/dev/null
+}
+
+_lw_wiki_append_index_source() {
+  _lw_wiki_upsert_index_source "$@"
 }
 
 lw_wiki_manifest_upsert() {
@@ -582,7 +617,12 @@ lw_wiki_manifest_upsert() {
   local compile_status="${11:-staged}"
   local audit_status="${12:-pending}"
   local review_state="${13:-unreviewed}"
+  local imported_at="${14:--}"
+  local updated_at="${15:-$(_lw_now)}"
   local root_parts space_id root_node sources_obj current updated py
+  if [[ "$imported_at" == "-" && ( "$compile_status" == "staged" || "$compile_status" == "extracted" ) ]]; then
+    imported_at="$updated_at"
+  fi
   root_parts="$(_lw_wiki_root_parts "$wiki_root")" || return $?
   space_id="$(printf '%s\n' "$root_parts" | jq -r '.space_id')"
   root_node="$(printf '%s\n' "$root_parts" | jq -r '.root_node')"
@@ -599,7 +639,8 @@ lw_wiki_manifest_upsert() {
     --kind "$kind" \
     --raw-node "$raw_node" \
     --origin "$origin" \
-    --imported-at "$(_lw_now)" \
+    --imported-at "$imported_at" \
+    --updated-at "$updated_at" \
     --checksum "$checksum" \
     --extraction "$extraction" \
     --source-page "$source_page" \
@@ -868,7 +909,7 @@ lw_wiki_stage_lark_doc() {
   shortcut_title="$(printf '%s\n' "$created" | jq -r '.title // .data.node.title // .node.title // empty')"
   shortcut_node="$(printf '%s\n' "$created" | jq -r '.node_token // .data.node.node_token // .node.node_token // empty')"
   [[ -n "$shortcut_title" ]] || shortcut_title="${title:-$source_obj_token}"
-  source_id="$(_lw_source_id)"
+  source_id="$(_lw_source_id "$wiki_root")"
 
   lw_wiki_manifest_append "$wiki_root" "$source_id" "$shortcut_title" "$kind" \
     "raw/$category/$shortcut_title" "$source" "-" "-" "-" "-" staged pending unreviewed
@@ -1062,7 +1103,7 @@ lw_wiki_stage_local_file() {
 
   extract_url="$(printf '%s\n' "$extract_json" | jq -r '.url // .data.node.url // .node.url // empty')"
   extract_node="$(printf '%s\n' "$extract_json" | jq -r '.node_token // .data.node.node_token // .node.node_token // empty')"
-  source_id="$(_lw_source_id)"
+  source_id="$(_lw_source_id "$wiki_root")"
   if command -v shasum >/dev/null 2>&1; then
     checksum="sha256:$(shasum -a 256 "$file_abs" | awk '{print $1}')"
   else
@@ -1343,18 +1384,33 @@ lw_wiki_health() {
           [[ -n "$obj_token" ]] || continue
           body="$(lw_cat "$obj_token" 2>/dev/null || true)"
           if [[ -z "${body//[[:space:]]/}" ]]; then
-            printf 'WARN wiki/%s/%s empty or unreadable\n' "$category" "$title"
-            warnings=$((warnings + 1))
+            if [[ "$category" == "audits" ]]; then
+              printf 'WARN wiki/%s/%s empty or unreadable\n' "$category" "$title"
+              warnings=$((warnings + 1))
+            else
+              printf 'FAIL wiki/%s/%s empty or unreadable\n' "$category" "$title"
+              failures=$((failures + 1))
+            fi
             continue
           fi
           first_line="$(printf '%s\n' "$body" | sed -n '1p')"
           if [[ "$first_line" != "---" ]]; then
-            printf 'WARN wiki/%s/%s missing YAML frontmatter\n' "$category" "$title"
-            warnings=$((warnings + 1))
+            if [[ "$category" == "audits" ]]; then
+              printf 'WARN wiki/%s/%s missing YAML frontmatter\n' "$category" "$title"
+              warnings=$((warnings + 1))
+            else
+              printf 'FAIL wiki/%s/%s missing YAML frontmatter\n' "$category" "$title"
+              failures=$((failures + 1))
+            fi
           fi
           if ! printf '%s\n' "$body" | grep -q '^source_refs:'; then
-            printf 'WARN wiki/%s/%s missing source_refs\n' "$category" "$title"
-            warnings=$((warnings + 1))
+            if [[ "$category" == "audits" ]]; then
+              printf 'WARN wiki/%s/%s missing source_refs\n' "$category" "$title"
+              warnings=$((warnings + 1))
+            else
+              printf 'FAIL wiki/%s/%s missing source_refs\n' "$category" "$title"
+              failures=$((failures + 1))
+            fi
           fi
         done < <(printf '%s\n' "$children" | jq -c '.data.items[]?')
       else
@@ -1382,6 +1438,16 @@ lw_wiki_health() {
     if printf '%s\n' "$source_text" | grep -Eq '\|[[:space:]]*(staged|extracted)[[:space:]]*\|'; then
       printf 'WARN SOURCES has staged/extracted rows; run compile workflow for pending sources\n'
       warnings=$((warnings + 1))
+    fi
+    if printf '%s\n' "$source_text" |
+      grep -Eq '\|[[:space:]]*compiled[[:space:]]*\|[[:space:]]*(-|pending|incomplete|unverified)[[:space:]]*\|'; then
+      printf 'FAIL SOURCES compile_status=compiled but audit_status is incomplete\n'
+      failures=$((failures + 1))
+    fi
+    if printf '%s\n' "$source_text" |
+      grep -Eq '\|[[:space:]]*(-|)[[:space:]]*\|[[:space:]]*compiled[[:space:]]*\|'; then
+      printf 'FAIL SOURCES compile_status=compiled but compiled_into is empty\n'
+      failures=$((failures + 1))
     fi
   fi
 
@@ -1594,8 +1660,8 @@ lw_usage() {
   lw_wiki_lint_plan LLM_WIKI_ROOT_URL
   lw_wiki_graph_plan LLM_WIKI_ROOT_URL
   lw_wiki_drift_plan LLM_WIKI_ROOT_URL
-  lw_wiki_manifest_upsert LLM_WIKI_ROOT_URL SOURCE_ID TITLE KIND RAW_NODE [ORIGIN] [CHECKSUM] [EXTRACTION] [SOURCE_PAGE] [COMPILED_INTO] [COMPILE_STATUS] [AUDIT_STATUS] [REVIEW_STATE]
-  lw_wiki_manifest_append LLM_WIKI_ROOT_URL SOURCE_ID TITLE KIND RAW_NODE [ORIGIN] [CHECKSUM] [EXTRACTION] [SOURCE_PAGE] [COMPILED_INTO] [COMPILE_STATUS] [AUDIT_STATUS] [REVIEW_STATE]
+  lw_wiki_manifest_upsert LLM_WIKI_ROOT_URL SOURCE_ID TITLE KIND RAW_NODE [ORIGIN] [CHECKSUM] [EXTRACTION] [SOURCE_PAGE] [COMPILED_INTO] [COMPILE_STATUS] [AUDIT_STATUS] [REVIEW_STATE] [IMPORTED_AT] [UPDATED_AT]
+  lw_wiki_manifest_append LLM_WIKI_ROOT_URL SOURCE_ID TITLE KIND RAW_NODE [ORIGIN] [CHECKSUM] [EXTRACTION] [SOURCE_PAGE] [COMPILED_INTO] [COMPILE_STATUS] [AUDIT_STATUS] [REVIEW_STATE] [IMPORTED_AT] [UPDATED_AT]
   lw_wiki_import_doc_shortcut LLM_WIKI_ROOT_URL WIKI_OR_DOC_URL [raw-category] [TITLE]   # 兼容别名：stage
   lw_wiki_import_local_file LLM_WIKI_ROOT_URL LOCAL_FILE [raw-category] [TITLE]          # 兼容别名：stage
   lw_wiki_move_doc_to_wiki SPACE_ID PARENT_NODE_TOKEN OBJ_TOKEN [OBJ_TYPE] [APPLY]

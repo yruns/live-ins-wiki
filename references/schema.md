@@ -87,9 +87,11 @@ SRC-YYYY-MM-DD-001
 `SOURCES` 是可解析的 source manifest，按表格维护：
 
 ```markdown
-| source_id | title | kind | raw_node | origin | imported_at | checksum | extraction | source_page | compiled_into | compile_status | audit_status | review_state |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| source_id | title | kind | raw_node | origin | imported_at | updated_at | checksum | extraction | source_page | compiled_into | compile_status | audit_status | review_state |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 ```
+
+`imported_at` 是不可变的首次导入时间；后续 stage / compile / audit / drift 更新只改 `updated_at` 和对应状态字段。
 
 状态含义：
 

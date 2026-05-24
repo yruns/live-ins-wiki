@@ -15,6 +15,7 @@ HEADERS = [
     "raw_node",
     "origin",
     "imported_at",
+    "updated_at",
     "checksum",
     "extraction",
     "source_page",
@@ -40,6 +41,21 @@ class Row:
     def to_markdown(self) -> str:
         return "| " + " | ".join(escape_cell(self.values[name]) for name in HEADERS) + " |"
 
+    def merged_with(self, existing: dict[str, str]) -> "Row":
+        merged: dict[str, str] = {}
+        for name in HEADERS:
+            incoming = self.values.get(name, "-") or "-"
+            current = existing.get(name, "-") or "-"
+            if name == "source_id":
+                merged[name] = incoming
+            elif name == "imported_at":
+                merged[name] = current if current != "-" else incoming
+            elif incoming == "-":
+                merged[name] = current
+            else:
+                merged[name] = incoming
+        return Row(merged)
+
 
 def escape_cell(value: str) -> str:
     return value.replace("\n", " ").replace("|", "\\|").strip()
@@ -49,7 +65,28 @@ def split_row(line: str) -> list[str]:
     stripped = line.strip()
     if not (stripped.startswith("|") and stripped.endswith("|")):
         return []
-    cells = [cell.strip().replace("\\|", "|") for cell in stripped.strip("|").split("|")]
+    body = stripped[1:-1]
+    cells: list[str] = []
+    buf: list[str] = []
+    escaped = False
+    for ch in body:
+        if escaped:
+            if ch == "|":
+                buf.append(ch)
+            else:
+                buf.append("\\")
+                buf.append(ch)
+            escaped = False
+        elif ch == "\\":
+            escaped = True
+        elif ch == "|":
+            cells.append("".join(buf).strip())
+            buf = []
+        else:
+            buf.append(ch)
+    if escaped:
+        buf.append("\\")
+    cells.append("".join(buf).strip())
     return cells
 
 
@@ -66,12 +103,29 @@ def table_separator() -> str:
     return "| " + " | ".join("---" for _ in HEADERS) + " |"
 
 
+def is_manifest_header(cells: list[str]) -> bool:
+    lowered = [cell.lower() for cell in cells]
+    return lowered[:6] == HEADERS[:6] and "compile_status" in lowered and "audit_status" in lowered
+
+
+def row_values(header: list[str], cells: list[str]) -> dict[str, str]:
+    values = {name: "-" for name in HEADERS}
+    for index, name in enumerate(header):
+        key = name.lower()
+        if key in values and index < len(cells):
+            values[key] = cells[index] or "-"
+    return values
+
+
 def upsert(text: str, row: Row) -> str:
     lines = text.splitlines()
     header_index = None
+    header: list[str] = HEADERS
     for index, line in enumerate(lines):
-        if [cell.lower() for cell in split_row(line)] == HEADERS:
+        cells = split_row(line)
+        if is_manifest_header(cells):
             header_index = index
+            header = [cell.lower() for cell in cells]
             break
 
     if header_index is None:
@@ -79,8 +133,11 @@ def upsert(text: str, row: Row) -> str:
         prefix = base + "\n\n" if base else ""
         return prefix + "\n".join([table_header(), table_separator(), row.to_markdown()]) + "\n"
 
+    lines[header_index] = table_header()
     if header_index + 1 >= len(lines) or not is_separator(lines[header_index + 1]):
         lines.insert(header_index + 1, table_separator())
+    else:
+        lines[header_index + 1] = table_separator()
 
     insert_at = header_index + 2
     index = insert_at
@@ -89,10 +146,15 @@ def upsert(text: str, row: Row) -> str:
         cells = split_row(lines[index])
         if not cells:
             break
-        if len(cells) >= 1 and cells[0] == row.source_id:
-            lines[index] = row.to_markdown()
+        current = row_values(header, cells)
+        if current["source_id"] == row.source_id and not replaced:
+            lines[index] = row.merged_with(current).to_markdown()
             replaced = True
-            break
+        elif current["source_id"] == row.source_id:
+            del lines[index]
+            continue
+        else:
+            lines[index] = Row(current).to_markdown()
         index += 1
 
     if not replaced:

@@ -24,7 +24,8 @@ metadata:
 - `raw/` 保存来源材料或来源快捷方式，不能被 agent 改写。
 - `wiki/` 保存 LLM 编译后的知识页，必须有 `source_refs`。
 - `SOURCES` 是 source manifest，记录 staged / extracted / compiled / audited 状态。
-- `INDEX` 是内容导航入口，query 先读它。
+- `SOURCES.imported_at` 是首次导入时间；后续状态更新只改 `updated_at`。
+- `INDEX` 是内容导航入口，query 先读它；source 行按 `Source ID` upsert，不能长期 append 重复行。
 - `LOG` 是追加式时间线，格式稳定。
 - `AGENTS.md` 是该具体 Wiki 的 runtime schema；初始化后优先遵守目标 Wiki 里的 `AGENTS.md`，再回退到本 skill 默认规则。
 

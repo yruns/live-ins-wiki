@@ -136,6 +136,8 @@ Health 是低成本、无需 LLM 的结构检查。先跑 health，再做 semant
 - compiled pages 是否至少包含 YAML frontmatter 和 `source_refs`；
 - 是否存在重复标题、空页或明显 stub；
 - 是否存在 `INDEX` 中登记但 Lark 节点缺失的页面。
+- `wiki/sources`、`wiki/entities`、`wiki/concepts`、`wiki/comparisons`、`wiki/overviews`、`wiki/decisions`、`wiki/syntheses`、`wiki/disputed` 缺 YAML frontmatter 或 `source_refs` 时必须 `FAIL`。
+- `SOURCES.compile_status=compiled` 但 `audit_status` 不完整，或 `compiled_into` 为空时必须 `FAIL`。
 
 Health 报告 `OK`、`WARN`、`FAIL`，不做语义裁决。
 

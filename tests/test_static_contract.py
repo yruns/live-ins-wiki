@@ -66,6 +66,18 @@ class StaticContractTest(unittest.TestCase):
             cwd=ROOT,
             check=True,
         )
+        subprocess.run(
+            [
+                "python3",
+                "-m",
+                "py_compile",
+                "scripts/manifest_upsert.py",
+                "scripts/source_id_next.py",
+                "scripts/index_upsert.py",
+            ],
+            cwd=ROOT,
+            check=True,
+        )
         with (ROOT / "agents/openai.yaml").open(encoding="utf-8") as file:
             data = yaml.safe_load(file)
         self.assertEqual(data["display_name"], "Lark LLM Wiki")
@@ -76,9 +88,9 @@ class StaticContractTest(unittest.TestCase):
             [
                 "# SOURCES",
                 "",
-                "| source_id | title | kind | raw_node | origin | imported_at | checksum | extraction | source_page | compiled_into | compile_status | audit_status | review_state |",
-                "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
-                "| SRC-1 | Old | doc | raw/docs/Old | url | t0 | - | - | - | - | staged | pending | unreviewed |",
+                "| source_id | title | kind | raw_node | origin | imported_at | updated_at | checksum | extraction | source_page | compiled_into | compile_status | audit_status | review_state |",
+                "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+                "| SRC-1 | Old | doc | raw/docs/Old | url | t0 | t0 | - | - | - | - | staged | pending | unreviewed |",
                 "",
             ]
         )
@@ -96,8 +108,8 @@ class StaticContractTest(unittest.TestCase):
                 "raw/docs/Old",
                 "--origin",
                 "url",
-                "--imported-at",
-                "t0",
+                "--updated-at",
+                "t1",
                 "--checksum",
                 "sha256:abc",
                 "--extraction",
@@ -120,8 +132,154 @@ class StaticContractTest(unittest.TestCase):
             check=True,
         )
         self.assertEqual(result.stdout.count("| SRC-1 |"), 1)
-        self.assertIn("| SRC-1 | Old | doc | raw/docs/Old | url | t0 | sha256:abc |", result.stdout)
+        self.assertIn("| SRC-1 | Old | doc | raw/docs/Old | url | t0 | t1 | sha256:abc |", result.stdout)
         self.assertIn("| wiki/sources/Old | wiki/concepts/foo | compiled | audited | reviewed |", result.stdout)
+
+    def test_manifest_upsert_round_trips_escaped_pipes_and_preserves_imported_at(self) -> None:
+        sample = "\n".join(
+            [
+                "# SOURCES",
+                "",
+                "| source_id | title | kind | raw_node | origin | imported_at | checksum | extraction | source_page | compiled_into | compile_status | audit_status | review_state |",
+                "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+                "| SRC-1 | A \\| B | doc | raw/docs/A | https://example.test/a | t0 | - | - | - | - | staged | pending | unreviewed |",
+                "",
+            ]
+        )
+        first = subprocess.run(
+            [
+                "python3",
+                "scripts/manifest_upsert.py",
+                "--source-id",
+                "SRC-1",
+                "--title",
+                "A | B updated",
+                "--kind",
+                "doc",
+                "--raw-node",
+                "raw/docs/A",
+                "--origin",
+                "https://example.test/a",
+                "--updated-at",
+                "t1",
+                "--compile-status",
+                "compiled_unverified",
+            ],
+            cwd=ROOT,
+            input=sample,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        second = subprocess.run(
+            [
+                "python3",
+                "scripts/manifest_upsert.py",
+                "--source-id",
+                "SRC-1",
+                "--title",
+                "A | B final",
+                "--kind",
+                "doc",
+                "--raw-node",
+                "raw/docs/A",
+                "--origin",
+                "https://example.test/a",
+                "--updated-at",
+                "t2",
+            ],
+            cwd=ROOT,
+            input=first.stdout,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        self.assertEqual(second.stdout.count("| SRC-1 |"), 1)
+        self.assertIn("A \\| B final", second.stdout)
+        self.assertIn("| raw/docs/A | https://example.test/a | t0 | t2 |", second.stdout)
+
+    def test_source_id_next_allocates_daily_sequence_from_manifest(self) -> None:
+        sample = "\n".join(
+            [
+                "| source_id | title | kind | raw_node | origin | imported_at | updated_at | checksum | extraction | source_page | compiled_into | compile_status | audit_status | review_state |",
+                "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+                "| SRC-2026-05-24-001 | A | doc | raw/docs/A | - | - | - | - | - | - | - | staged | pending | unreviewed |",
+                "| SRC-2026-05-24-002 | B | doc | raw/docs/B | - | - | - | - | - | - | - | staged | pending | unreviewed |",
+                "| SRC-2026-05-23-009 | C | doc | raw/docs/C | - | - | - | - | - | - | - | staged | pending | unreviewed |",
+            ]
+        )
+        result = subprocess.run(
+            ["python3", "scripts/source_id_next.py", "--date", "2026-05-24"],
+            cwd=ROOT,
+            input=sample,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        self.assertEqual(result.stdout.strip(), "SRC-2026-05-24-003")
+
+    def test_index_upsert_updates_sources_table_without_duplicate_rows(self) -> None:
+        first = subprocess.run(
+            [
+                "python3",
+                "scripts/index_upsert.py",
+                "--section",
+                "Sources",
+                "--key-column",
+                "Source ID",
+                "--page",
+                "raw/docs/A",
+                "--source-id",
+                "SRC-1",
+                "--type",
+                "doc",
+                "--summary",
+                "Old | summary",
+                "--compiled-into",
+                "-",
+                "--status",
+                "staged",
+                "--last-updated",
+                "2026-05-24",
+            ],
+            cwd=ROOT,
+            input=read("references/templates/INDEX.md"),
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        second = subprocess.run(
+            [
+                "python3",
+                "scripts/index_upsert.py",
+                "--section",
+                "Sources",
+                "--key-column",
+                "Source ID",
+                "--page",
+                "raw/docs/A",
+                "--source-id",
+                "SRC-1",
+                "--type",
+                "doc",
+                "--summary",
+                "New | summary",
+                "--compiled-into",
+                "wiki/concepts/a",
+                "--status",
+                "compiled",
+                "--last-updated",
+                "2026-05-25",
+            ],
+            cwd=ROOT,
+            input=first.stdout,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        self.assertEqual(second.stdout.count("SRC-1"), 1)
+        self.assertIn("New \\| summary", second.stdout)
+        self.assertIn("| raw/docs/A | SRC-1 | doc |", second.stdout)
 
     def test_skill_and_templates_have_parseable_frontmatter(self) -> None:
         skill = parse_frontmatter("SKILL.md")
@@ -226,8 +384,12 @@ class StaticContractTest(unittest.TestCase):
         self.assertIn("missing YAML frontmatter", script)
         self.assertIn("missing source_refs", script)
         self.assertIn("SOURCES has staged/extracted rows", script)
+        self.assertIn("compile_status=compiled but audit_status is incomplete", script)
+        self.assertIn("compile_status=compiled but compiled_into is empty", script)
         self.assertIn("compiled_unverified", script)
         self.assertIn("graph/backlink audit", script)
+        self.assertIn("source_id_next.py", script)
+        self.assertIn("index_upsert.py", script)
 
     def test_init_dry_run_plans_full_tree(self) -> None:
         init = read("scripts/init_lark_wiki_tree.sh")

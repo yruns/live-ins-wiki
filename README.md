@@ -2,7 +2,7 @@
 
 Lark/Feishu-native Codex skill for maintaining a Karpathy-style LLM Wiki as a real Wiki node tree.
 
-This is not a generic RAG system, not a local Obsidian vault, and not one Lark document full of links. It preserves raw sources in `raw/`, compiles durable knowledge into `wiki/`, and tracks provenance through `SOURCES`, `INDEX`, `LOG`, YAML frontmatter, and `source_refs`.
+This is not a generic RAG system, not a local Obsidian vault, and not one Lark document full of links. It preserves raw sources in `raw/`, compiles durable knowledge into `wiki/`, and tracks provenance through `SOURCES`, `INDEX`, `LOG`, YAML frontmatter, and `source_refs`. `SOURCES` and `INDEX` are current-state tables: source rows are upserted, not blindly appended.
 
 ## Requirements
 
@@ -35,5 +35,5 @@ scripts/lark_wiki.sh wiki-health "$LLM_WIKI_ROOT"
 ```bash
 python3 -m unittest tests/test_static_contract.py
 bash -n scripts/lark_wiki.sh scripts/init_lark_wiki_tree.sh
-python3 -m py_compile scripts/extract_local_file.py
+python3 -m py_compile scripts/extract_local_file.py scripts/manifest_upsert.py scripts/source_id_next.py scripts/index_upsert.py
 ```
