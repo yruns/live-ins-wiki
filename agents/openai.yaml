@@ -1,0 +1,3 @@
+display_name: Lark LLM Wiki
+short_description: 用真实 Lark Wiki 节点树构建和维护 LLM Wiki 知识库。
+default_prompt: 使用 Lark LLM Wiki skill 在用户确认的大知识库父节点下初始化、导入、查询、检查或维护 Lark Wiki 子树；Lark docs/wiki 建快捷方式，本地文件先上传原始文件再解析编译。
