@@ -32,13 +32,13 @@
 
 ## Bootstrap Existing Root
 
-当用户明确把某个已有 Wiki 文档节点指定为 LLM Wiki 根节点时，不要默认再创建一层 `LLM Wiki` 子入口。先运行 health；如果标准子节点缺失，运行：
+当用户明确把某个已有 Wiki 文档节点指定为 LLM Wiki 根节点时，不要默认再创建一层 `LLM Wiki` 子入口。先做轻量根层检查；如果标准子节点缺失，运行：
 
 ```bash
 scripts/lark_wiki.sh wiki-bootstrap-root WIKI_ROOT_NODE_URL_OR_TOKEN [ROOT_TITLE]
 ```
 
-Bootstrap 前必须先检查根节点是否干净：
+Bootstrap 前必须先检查根节点是否干净。不要默认运行完整 `wiki-health`；它会读取更多 Lark 节点和页面正文，只在用户明确要求或排查复杂结构问题时使用：
 
 - 如果根节点没有子节点，可以直接运行 `wiki-bootstrap-root`。
 - 如果根节点只有 `AGENTS.md`、`INDEX`、`LOG`、`SOURCES`、`raw`、`wiki` 这些标准子节点，视为已有或部分初始化的 LLM Wiki，可以继续幂等补齐。

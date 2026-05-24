@@ -804,6 +804,23 @@ class StaticContractTest(unittest.TestCase):
         self.assertIn("INDEX [sheet]", init)
         self.assertIn("SOURCES [sheet]", init)
 
+    def test_sheet_batch_update_fails_on_nonzero_business_code(self) -> None:
+        command = r'''
+source scripts/lark_wiki.sh
+_lw_api() {
+  printf '{"code":999,"msg":"business failed"}\n'
+}
+_lw_sheet_batch_update fake_token '[{"addSheet":{"properties":{"title":"Concepts"}}}]'
+'''
+        result = subprocess.run(
+            ["bash", "-lc", command],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("sheets_batch_update failed", result.stderr)
+
     def test_bootstrap_repairs_existing_standard_sheets(self) -> None:
         script = read("scripts/lark_wiki.sh")
         self.assertIn("_lw_wiki_repair_existing_standard_sheet", script)
@@ -825,6 +842,7 @@ class StaticContractTest(unittest.TestCase):
         self.assertIn('_lw_wiki_assert_clean_bootstrap_root "$space_id" "$root_node"', script)
         self.assertIn("非标准子节点", workflows)
         self.assertIn("询问用户是否删除或移动", workflows)
+        self.assertIn("不要默认运行完整 `wiki-health`", workflows)
 
 
 if __name__ == "__main__":

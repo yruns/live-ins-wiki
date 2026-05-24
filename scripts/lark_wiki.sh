@@ -1072,11 +1072,20 @@ _lw_sheet_batch_update() {
   _lw_need jq
   local spreadsheet_token="$1"
   local requests_json="$2"
+  local response code msg
   if [[ "$(printf '%s\n' "$requests_json" | jq 'length')" == "0" ]]; then
     return 0
   fi
-  _lw_api POST "/open-apis/sheets/v2/spreadsheets/$spreadsheet_token/sheets_batch_update" \
-    --data "$(jq -c -n --argjson requests "$requests_json" '{requests: $requests}')"
+  response="$(_lw_api POST "/open-apis/sheets/v2/spreadsheets/$spreadsheet_token/sheets_batch_update" \
+    --data "$(jq -c -n --argjson requests "$requests_json" '{requests: $requests}')")" || return $?
+  code="$(printf '%s\n' "$response" | jq -r '.code // empty')"
+  if [[ "$code" != "0" ]]; then
+    msg="$(printf '%s\n' "$response" | jq -r '.msg // .message // "unknown error"')"
+    printf 'sheets_batch_update failed: code=%s msg=%s\n' "${code:-missing}" "$msg" >&2
+    printf '%s\n' "$response" >&2
+    return 1
+  fi
+  printf '%s\n' "$response"
 }
 
 _lw_sheet_ensure_tabs() {
@@ -1084,9 +1093,9 @@ _lw_sheet_ensure_tabs() {
   _lw_need jq
   local spreadsheet_token="$1"
   local titles_json="$2"
-  local sheets_json requests_json
+  local sheets_json rename_requests_json add_requests_json
   sheets_json="$(lark-cli api GET "/open-apis/sheets/v3/spreadsheets/$spreadsheet_token/sheets/query" --as "$LW_AS")"
-  requests_json="$(jq -c -n \
+  rename_requests_json="$(jq -c -n \
     --argjson response "$sheets_json" \
     --argjson titles "$titles_json" '
     ($response.data.sheets // []) as $sheets
@@ -1098,14 +1107,33 @@ _lw_sheet_ensure_tabs() {
            and $first_sheet_id != ""
            and (($existing_titles | index($first_title)) == null)
         then {updateSheet: {properties: {sheetId: $first_sheet_id, title: $first_title}}}
-        else empty end,
+        else empty end
+      ]
+  ')"
+  _lw_sheet_batch_update "$spreadsheet_token" "$rename_requests_json" >/dev/null
+  add_requests_json="$(jq -c -n \
+    --argjson response "$sheets_json" \
+    --argjson titles "$titles_json" '
+    ($response.data.sheets // []) as $sheets
+    | ($sheets | map(.title // "")) as $existing_titles
+    | ($titles[0] // "") as $first_title
+    | ($sheets[0].sheet_id // "") as $first_sheet_id
+    | (
+        $existing_titles
+        + if $first_title != ""
+             and $first_sheet_id != ""
+             and (($existing_titles | index($first_title)) == null)
+          then [$first_title]
+          else []
+          end
+      ) as $titles_after_rename
+    | [
         ($titles[]
-          | select(. != $first_title)
-          | select(($existing_titles | index(.)) == null)
+          | select(($titles_after_rename | index(.)) == null)
           | {addSheet: {properties: {title: .}}})
       ]
   ')"
-  _lw_sheet_batch_update "$spreadsheet_token" "$requests_json" >/dev/null
+  _lw_sheet_batch_update "$spreadsheet_token" "$add_requests_json" >/dev/null
 }
 
 _lw_sheet_write_headers() {
