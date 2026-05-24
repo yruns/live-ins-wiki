@@ -8,7 +8,7 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Install Python test deps
@@ -18,6 +18,6 @@ jobs:
       - name: Shell syntax
         run: bash -n scripts/lark_wiki.sh scripts/init_lark_wiki_tree.sh
       - name: Python syntax
-        run: python3 -m py_compile scripts/extract_local_file.py scripts/manifest_upsert.py scripts/source_id_next.py scripts/index_upsert.py scripts/wiki_registry.py
+        run: python3 -m py_compile scripts/extract_local_file.py scripts/manifest_upsert.py scripts/source_id_next.py scripts/index_upsert.py scripts/wiki_registry.py scripts/manifest_find.py scripts/manifest_lint.py
       - name: Shellcheck
         run: shellcheck --severity=warning scripts/lark_wiki.sh scripts/init_lark_wiki_tree.sh

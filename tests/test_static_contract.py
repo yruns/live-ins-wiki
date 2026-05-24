@@ -77,6 +77,8 @@ class StaticContractTest(unittest.TestCase):
                 "scripts/source_id_next.py",
                 "scripts/index_upsert.py",
                 "scripts/wiki_registry.py",
+                "scripts/manifest_find.py",
+                "scripts/manifest_lint.py",
             ],
             cwd=ROOT,
             check=True,
@@ -220,6 +222,72 @@ class StaticContractTest(unittest.TestCase):
             check=True,
         )
         self.assertEqual(result.stdout.strip(), "SRC-2026-05-24-003")
+
+    def test_manifest_find_reuses_existing_source_identity(self) -> None:
+        sample = "\n".join(
+            [
+                "| source_id | title | kind | raw_node | origin | imported_at | updated_at | checksum | extraction | source_page | compiled_into | compile_status | audit_status | review_state |",
+                "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+                "| SRC-1 | A \\| B | doc | raw/docs/A | https://example.test/a | t0 | t1 | - | - | - | - | staged | pending | unreviewed |",
+                "| SRC-2 | Local | local_file | raw/assets/file.pdf | /tmp/file.pdf | t0 | t1 | sha256:abc | raw/extracts/file | - | - | extracted | pending | unreviewed |",
+            ]
+        )
+        by_origin = subprocess.run(
+            ["python3", "scripts/manifest_find.py", "--origin", "https://example.test/a"],
+            cwd=ROOT,
+            input=sample,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        by_checksum = subprocess.run(
+            ["python3", "scripts/manifest_find.py", "--kind", "local_file", "--checksum", "sha256:abc"],
+            cwd=ROOT,
+            input=sample,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        checksum_miss = subprocess.run(
+            [
+                "python3",
+                "scripts/manifest_find.py",
+                "--kind",
+                "local_file",
+                "--checksum",
+                "sha256:new",
+                "--raw-node",
+                "raw/assets/file.pdf",
+            ],
+            cwd=ROOT,
+            input=sample,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(by_origin.stdout.strip(), "SRC-1")
+        self.assertEqual(by_checksum.stdout.strip(), "SRC-2")
+        self.assertNotEqual(checksum_miss.returncode, 0)
+
+    def test_manifest_lint_uses_markdown_table_parser(self) -> None:
+        sample = "\n".join(
+            [
+                "| source_id | title | kind | raw_node | origin | imported_at | updated_at | checksum | extraction | source_page | compiled_into | compile_status | audit_status | review_state |",
+                "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+                "| SRC-1 | A \\| B | doc | raw/docs/A | https://example.test/a | t0 | t1 | - | - | wiki/sources/A | - | compiled | pending | unreviewed |",
+                "| SRC-2 | staged \\| title | doc | raw/docs/B | https://example.test/b | t0 | t1 | - | - | - | - | staged | pending | unreviewed |",
+            ]
+        )
+        result = subprocess.run(
+            ["python3", "scripts/manifest_lint.py"],
+            cwd=ROOT,
+            input=sample,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        self.assertIn("FAIL SOURCES compile_status=compiled but audit_status is incomplete", result.stdout)
+        self.assertIn("FAIL SOURCES compile_status=compiled but compiled_into is empty", result.stdout)
+        self.assertIn("WARN SOURCES has staged/extracted rows", result.stdout)
 
     def test_index_upsert_updates_sources_table_without_duplicate_rows(self) -> None:
         first = subprocess.run(
@@ -431,14 +499,14 @@ class StaticContractTest(unittest.TestCase):
         self.assertIn("Completeness: partial", script)
         self.assertIn("missing YAML frontmatter", script)
         self.assertIn("missing source_refs", script)
-        self.assertIn("SOURCES has staged/extracted rows", script)
-        self.assertIn("compile_status=compiled but audit_status is incomplete", script)
-        self.assertIn("compile_status=compiled but compiled_into is empty", script)
         self.assertIn("compiled_unverified", script)
         self.assertIn("graph/backlink audit", script)
         self.assertIn("source_id_next.py", script)
         self.assertIn("index_upsert.py", script)
         self.assertIn("wiki_registry.py", script)
+        self.assertIn("manifest_find.py", script)
+        self.assertIn("manifest_lint.py", script)
+        self.assertIn("_lw_wiki_manifest_find_source_id", script)
         self.assertIn(".lark-llm-wiki", script)
         self.assertIn("wiki-registry-current", script)
         self.assertIn("wiki-registry-list", script)

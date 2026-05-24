@@ -67,16 +67,18 @@ Stage 只表示来源已进入 raw，并登记到 `SOURCES`。它不等于 compi
 1. 确认目标 Wiki root 和 raw 分类。
 2. 用 `lw_wiki_stage_lark_doc ROOT SOURCE_URL docs|articles|repos|meetings|assets [TITLE]`。
 3. 脚本创建 raw 快捷方式、写 `SOURCES`、追加 `LOG`。
-4. 输出必须包含：`Status: staged only. Not compiled.`
-5. 下一步是 `lw_wiki_compile_source_plan`，由 LLM 做语义编译。
+4. 如果 `SOURCES` 中已存在同一 origin/raw node/token 的来源，复用旧 `source_id`，只更新 `updated_at` 和当前状态。
+5. 输出必须包含：`Status: staged only. Not compiled.`
+6. 下一步是 `lw_wiki_compile_source_plan`，由 LLM 做语义编译。
 
 ### Local file
 
 1. 确认目标 Wiki root 和 raw 分类。
 2. 用 `lw_wiki_stage_local_file ROOT FILE assets [TITLE]`。
 3. 脚本上传原始文件，创建 `raw/<category>` 快捷方式，抽取文本，创建 `raw/extracts/<title>.extract`，登记 `SOURCES`。
-4. 如果上传失败，不能继续写 Wiki。
-5. 本地路径只能作为调试信息；可追溯依据是 Lark raw 文件 token、raw shortcut 和 extraction page。
+4. 如果同一 checksum 已在 `SOURCES` 中登记，复用旧 `source_id`；同标题但 checksum 不同不能自动去重。
+5. 如果上传失败，不能继续写 Wiki。
+6. 本地路径只能作为调试信息；可追溯依据是 Lark raw 文件 token、raw shortcut 和 extraction page。
 
 ## Compile
 
@@ -165,6 +167,7 @@ Health 是低成本、无需 LLM 的结构检查。先跑 health，再做 semant
 - 是否存在重复标题、空页或明显 stub；
 - 是否存在 `INDEX` 中登记但 Lark 节点缺失的页面。
 - `wiki/sources`、`wiki/entities`、`wiki/concepts`、`wiki/comparisons`、`wiki/overviews`、`wiki/decisions`、`wiki/syntheses`、`wiki/disputed` 缺 YAML frontmatter 或 `source_refs` 时必须 `FAIL`。
+- `SOURCES` 状态必须用 manifest parser 检查，不能用 grep 猜列位置；escaped pipe 不应影响判断。
 - `SOURCES.compile_status=compiled` 但 `audit_status` 不完整，或 `compiled_into` 为空时必须 `FAIL`。
 
 Health 报告 `OK`、`WARN`、`FAIL`，不做语义裁决。

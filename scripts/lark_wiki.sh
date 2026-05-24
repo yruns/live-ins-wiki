@@ -743,6 +743,23 @@ lw_wiki_manifest_append() {
   lw_wiki_manifest_upsert "$@"
 }
 
+_lw_wiki_manifest_find_source_id() {
+  local wiki_root="$1"
+  shift
+  local root_parts space_id root_node sources_obj current py
+  root_parts="$(_lw_wiki_root_parts "$wiki_root")" || return $?
+  space_id="$(printf '%s\n' "$root_parts" | jq -r '.space_id')"
+  root_node="$(printf '%s\n' "$root_parts" | jq -r '.root_node')"
+  sources_obj="$(_lw_wiki_child_obj "$space_id" "$root_node" "SOURCES")" || return $?
+  py="$(_lw_python)"
+  [[ -n "$py" ]] || {
+    printf '缺少 python3，无法查询 SOURCES manifest\n' >&2
+    return 127
+  }
+  current="$(lw_cat "$sources_obj")"
+  printf '%s\n' "$current" | "$py" "$LW_SCRIPT_DIR/manifest_find.py" "$@"
+}
+
 _lw_truncated_cat() {
   local target="$1"
   local max_chars="${2:-12000}"
@@ -954,7 +971,7 @@ lw_wiki_stage_lark_doc() {
   local title="${4:-}"
   local root_parts space_id root_node raw_node category_node created
   local source_obj_token source_kind source_children existing source_json
-  local shortcut_url shortcut_title shortcut_node source_id kind
+  local shortcut_url shortcut_title shortcut_node source_id kind raw_path existing_source_id
 
   root_parts="$(_lw_wiki_root_parts "$wiki_root")" || return $?
   space_id="$(printf '%s\n' "$root_parts" | jq -r '.space_id')"
@@ -1000,12 +1017,22 @@ lw_wiki_stage_lark_doc() {
   shortcut_title="$(printf '%s\n' "$created" | jq -r '.title // .data.node.title // .node.title // empty')"
   shortcut_node="$(printf '%s\n' "$created" | jq -r '.node_token // .data.node.node_token // .node.node_token // empty')"
   [[ -n "$shortcut_title" ]] || shortcut_title="${title:-$source_obj_token}"
-  source_id="$(_lw_source_id "$wiki_root")"
+  raw_path="raw/$category/$shortcut_title"
+  existing_source_id="$(_lw_wiki_manifest_find_source_id "$wiki_root" \
+    --origin "$source" \
+    --raw-node "$raw_path" \
+    --kind "$kind" \
+    --obj-token "$source_obj_token" 2>/dev/null || true)"
+  if [[ -n "$existing_source_id" ]]; then
+    source_id="$existing_source_id"
+  else
+    source_id="$(_lw_source_id "$wiki_root")"
+  fi
 
   lw_wiki_manifest_append "$wiki_root" "$source_id" "$shortcut_title" "$kind" \
-    "raw/$category/$shortcut_title" "$source" "-" "-" "-" "-" staged pending unreviewed
-  _lw_wiki_append_index_source "$space_id" "$root_node" "raw/$category/$shortcut_title" "$source_id" "$kind" "staged source shortcut" staged
-  _lw_wiki_append_log "$space_id" "$root_node" "import" "$source_id" "Stage Lark source as raw/$category/$shortcut_title"
+    "$raw_path" "$source" "-" "-" "-" "-" staged pending unreviewed
+  _lw_wiki_append_index_source "$space_id" "$root_node" "$raw_path" "$source_id" "$kind" "staged source shortcut" staged
+  _lw_wiki_append_log "$space_id" "$root_node" "import" "$source_id" "Stage Lark source as $raw_path"
 
   printf 'Status: staged only. Not compiled.\n' >&2
   printf 'Next: scripts/lark_wiki.sh wiki-compile-source-plan %q %q\n' "$wiki_root" "$source_id" >&2
@@ -1123,7 +1150,7 @@ lw_wiki_stage_local_file() {
   local root_parts space_id root_node raw_node category_node extracts_node
   local file_abs basename existing_raw upload_json file_token shortcut_json
   local shortcut_title shortcut_url shortcut_node extract_title existing_extract extract_json
-  local extract_url extract_node extracted source_id checksum
+  local extract_url extract_node extracted source_id checksum raw_path extract_path existing_source_id
 
   if [[ ! -f "$file" ]]; then
     printf '本地文件不存在或不是普通文件: %s\n' "$file" >&2
@@ -1134,6 +1161,11 @@ lw_wiki_stage_local_file() {
   if [[ -z "$title" ]]; then
     title="$basename"
   fi
+  if command -v shasum >/dev/null 2>&1; then
+    checksum="sha256:$(shasum -a 256 "$file_abs" | awk '{print $1}')"
+  else
+    checksum="-"
+  fi
 
   root_parts="$(_lw_wiki_root_parts "$wiki_root")" || return $?
   space_id="$(printf '%s\n' "$root_parts" | jq -r '.space_id')"
@@ -1141,6 +1173,9 @@ lw_wiki_stage_local_file() {
   raw_node="$(_lw_wiki_child_node "$space_id" "$root_node" "raw")" || return $?
   category_node="$(_lw_wiki_child_node "$space_id" "$raw_node" "$category")" || return $?
   extracts_node="$(_lw_wiki_child_node "$space_id" "$raw_node" "extracts")" || return $?
+  existing_source_id="$(_lw_wiki_manifest_find_source_id "$wiki_root" \
+    --kind local_file \
+    --checksum "$checksum" 2>/dev/null || true)"
 
   existing_raw="$(lw_wiki_list_children "$space_id" "$category_node" 50 | jq -r --arg title "$title" '
     (.data.items // [])
@@ -1149,6 +1184,10 @@ lw_wiki_stage_local_file() {
     | if . then {title, node_token, url, obj_token, obj_type, node_type, parent_node_token, space_id} else empty end
   ')"
   if [[ -n "$existing_raw" ]]; then
+    if [[ -z "$existing_source_id" && "$checksum" != "-" ]]; then
+      printf '已存在同名 raw 节点但 checksum 未匹配现有 SOURCES；请使用不同 TITLE，避免把新文件登记到旧 raw shortcut。\n' >&2
+      return 2
+    fi
     shortcut_json="$existing_raw"
     file_token="$(printf '%s\n' "$existing_raw" | jq -r '.obj_token // empty')"
   else
@@ -1194,17 +1233,25 @@ lw_wiki_stage_local_file() {
 
   extract_url="$(printf '%s\n' "$extract_json" | jq -r '.url // .data.node.url // .node.url // empty')"
   extract_node="$(printf '%s\n' "$extract_json" | jq -r '.node_token // .data.node.node_token // .node.node_token // empty')"
-  source_id="$(_lw_source_id "$wiki_root")"
-  if command -v shasum >/dev/null 2>&1; then
-    checksum="sha256:$(shasum -a 256 "$file_abs" | awk '{print $1}')"
+  raw_path="raw/$category/$shortcut_title"
+  extract_path="raw/extracts/$extract_title"
+  if [[ -z "$existing_source_id" ]]; then
+    existing_source_id="$(_lw_wiki_manifest_find_source_id "$wiki_root" \
+      --kind local_file \
+      --checksum "$checksum" \
+      --raw-node "$raw_path" \
+      --origin "$file_abs" 2>/dev/null || true)"
+  fi
+  if [[ -n "$existing_source_id" ]]; then
+    source_id="$existing_source_id"
   else
-    checksum="-"
+    source_id="$(_lw_source_id "$wiki_root")"
   fi
 
   lw_wiki_manifest_append "$wiki_root" "$source_id" "$shortcut_title" local_file \
-    "raw/$category/$shortcut_title" "$file_abs" "$checksum" "raw/extracts/$extract_title" "-" "-" extracted pending unreviewed
-  _lw_wiki_append_index_source "$space_id" "$root_node" "raw/$category/$shortcut_title" "$source_id" local_file "extracted local file" extracted
-  _lw_wiki_append_log "$space_id" "$root_node" "import" "$source_id" "Stage local file as raw/$category/$shortcut_title and raw/extracts/$extract_title"
+    "$raw_path" "$file_abs" "$checksum" "$extract_path" "-" "-" extracted pending unreviewed
+  _lw_wiki_append_index_source "$space_id" "$root_node" "$raw_path" "$source_id" local_file "extracted local file" extracted
+  _lw_wiki_append_log "$space_id" "$root_node" "import" "$source_id" "Stage local file as $raw_path and $extract_path"
 
   rm -f "$extracted" "$extracted.prepared"
   printf 'Status: staged only. Not compiled.\n' >&2
@@ -1423,7 +1470,7 @@ lw_wiki_health() {
   local wiki_root="${1:-@current}"
   local root_parts space_id root_node raw_node wiki_node
   local failures=0 warnings=0 child node obj category category_node children duplicate_count source_obj index_obj log_obj
-  local node_json title obj_token obj_type body first_line source_text
+  local node_json title obj_token obj_type body first_line source_text py lint_output line
   if [[ -z "$wiki_root" ]]; then
     printf '用法: lw_wiki_health [LLM_WIKI_ROOT_URL|@current|NAME]\n' >&2
     return 2
@@ -1530,23 +1577,20 @@ lw_wiki_health() {
   done
   if [[ -n "$source_obj" ]]; then
     source_text="$(lw_cat "$source_obj" 2>/dev/null || true)"
-    if ! printf '%s\n' "$source_text" | grep -q '| source_id | title | kind |'; then
-      printf 'FAIL SOURCES manifest table header missing\n'
+    py="$(_lw_python)"
+    if [[ -z "$py" ]]; then
+      printf 'FAIL SOURCES cannot lint manifest: python3 missing\n'
       failures=$((failures + 1))
-    fi
-    if printf '%s\n' "$source_text" | grep -Eq '\|[[:space:]]*(staged|extracted)[[:space:]]*\|'; then
-      printf 'WARN SOURCES has staged/extracted rows; run compile workflow for pending sources\n'
-      warnings=$((warnings + 1))
-    fi
-    if printf '%s\n' "$source_text" |
-      grep -Eq '\|[[:space:]]*compiled[[:space:]]*\|[[:space:]]*(-|pending|incomplete|unverified)[[:space:]]*\|'; then
-      printf 'FAIL SOURCES compile_status=compiled but audit_status is incomplete\n'
-      failures=$((failures + 1))
-    fi
-    if printf '%s\n' "$source_text" |
-      grep -Eq '\|[[:space:]]*(-|)[[:space:]]*\|[[:space:]]*compiled[[:space:]]*\|'; then
-      printf 'FAIL SOURCES compile_status=compiled but compiled_into is empty\n'
-      failures=$((failures + 1))
+    else
+      lint_output="$(printf '%s\n' "$source_text" | "$py" "$LW_SCRIPT_DIR/manifest_lint.py")"
+      while IFS= read -r line; do
+        [[ -n "$line" ]] || continue
+        printf '%s\n' "$line"
+        case "$line" in
+          FAIL*) failures=$((failures + 1)) ;;
+          WARN*) warnings=$((warnings + 1)) ;;
+        esac
+      done <<<"$lint_output"
     fi
   fi
 
