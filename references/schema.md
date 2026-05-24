@@ -8,9 +8,9 @@
 
 ```text
 AGENTS.md
-INDEX
+INDEX         # obj_type=sheet for new/rebuilt Wiki
 LOG
-SOURCES
+SOURCES       # obj_type=sheet for new/rebuilt Wiki
 raw/
   docs/
   articles/
@@ -84,14 +84,14 @@ SRC-YYYY-MM-DD-001
 
 ## SOURCES manifest
 
-`SOURCES` 是可解析的 source manifest，按表格维护：
+`SOURCES` 是可解析的 source manifest，按表格维护。新建或破坏性重建时必须创建 Feishu spreadsheet 节点；旧 Wiki 可以保留 Markdown 文档表格作为兼容 fallback。
 
 ```markdown
 | source_id | title | kind | raw_node | origin | imported_at | updated_at | checksum | extraction | source_page | compiled_into | compile_status | audit_status | review_state |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 ```
 
-`imported_at` 是不可变的首次导入时间；后续 stage / compile / audit / drift 更新只改 `updated_at` 和对应状态字段。
+`imported_at` 是不可变的首次导入时间；后续 stage / compile / audit / drift 更新只改 `updated_at` 和对应状态字段。所有时间字段必须精确到秒并带时区，例如 `2026-05-24T20:20:00+08:00`；不能只写 `2026-05-24`。
 
 状态含义：
 
@@ -112,6 +112,14 @@ Drift 字段建议：
 ## 引用规则
 
 事实性段落必须有 `source_refs` 支撑。回答用户时优先引用 compiled page；如果 compiled page 缺少证据，再回退 raw。
+
+任何表格或正文中的 refs 都必须可点击：
+
+- `source_id` 应链接到对应 `wiki/sources/<source>` 页面或 `SOURCES` manifest 行。
+- `raw_node` 应链接到 raw shortcut / raw extraction 节点。
+- `source_page`、`compiled_into`、`related_pages`、`audit target` 应链接到真实 Wiki 节点 URL。
+- Feishu spreadsheet 优先使用 hyperlink / `HYPERLINK()` 公式；Markdown fallback 使用 `[label](url)`。
+- `compiled_into` / `Compiled Into` 如果有多个 target，必须在同一单元格内一项一行，且每一项都是可点击链接。
 
 推荐 claim 表：
 
@@ -180,7 +188,27 @@ Passing mention 不建页，放在 source page 的 `Mentioned but not tracked`�
 
 - YAML frontmatter 可被导出保留。
 - Lark node URL 是物理链接；slug 是逻辑链接。
-- `INDEX`、`LOG`、`SOURCES` 使用稳定 Markdown 表格或小节格式，便于脚本和 LLM 读取。
+- `LOG` 使用稳定小节格式。
+- `INDEX` 和 `SOURCES` 的主形态是 Feishu spreadsheet；新建或重建 Wiki 必须使用 sheet，每个主表使用独立 sheet，便于 agent 精准读写。
+- 兼容旧 Wiki 时，`INDEX`、`SOURCES` 可以使用稳定 Markdown 表格；脚本读取前必须 normalize Lark table export。
+
+## INDEX Catalog
+
+`INDEX` 的 sheet/section 必须与真实目录同步：
+
+- `Sources`：Page、Source ID、Type、Summary、Compiled Into、Status、Last Updated。
+- `Concepts`、`Entities`、`Comparisons`、`Overviews`、`Syntheses`：Page、Summary、Source Count、Last Updated、Review State。
+- `Decisions`：Page、Summary、Status、Last Updated、Review State。
+- `Disputed`：Page、Claim、Status、Last Updated、Needs Human Review。
+- `Audits`：Page、Target Source、Status、Last Updated。
+
+Compile 创建或更新任何 `wiki/*` 编译页后，必须 upsert 对应 `INDEX` 行；只更新 Sources 不算目录同步完成。
+
+`INDEX` 的 Page、Compiled Into、Target Source 等 refs 列必须可点击，`Last Updated` 必须精确到秒。
+
+`Compiled Into` 多值列必须使用换行分隔，避免一整串分号导致人工扫描和 agent diff 都变差。
+
+每次 Compile 后必须运行 `wiki-structure-lint` 做 `INDEX` catalog lint：`INDEX` 各 sheet 的 Page 列与真实 `wiki/<category>` 子节点必须双向完全一致。真实目录有但 INDEX 没有、INDEX 有但真实目录没有，都是结构错误。
 
 ## Graph / Backlink
 

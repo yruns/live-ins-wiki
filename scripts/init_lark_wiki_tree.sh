@@ -22,7 +22,7 @@ usage() {
   - 节点必须是文档型 Wiki 节点，obj_type 为 docx 或 doc。
   - 不会在知识空间根部创建入口，也不会创建独立知识库空间。
   - 如果父节点下已经存在同名入口，默认直接返回已有入口并退出 0。
-  - 初始化会创建 AGENTS.md、INDEX、LOG、SOURCES、raw/docs、raw/articles、
+  - 初始化会创建 AGENTS.md、INDEX [sheet]、LOG、SOURCES [sheet]、raw/docs、raw/articles、
     raw/repos、raw/meetings、raw/assets、raw/extracts、raw/manifests、
     wiki/sources、wiki/entities、wiki/concepts、wiki/comparisons、
     wiki/overviews、wiki/decisions、wiki/syntheses、wiki/disputed、wiki/audits。
@@ -104,9 +104,9 @@ if [[ "$dry_run" == "1" || "$dry_run" == "true" ]]; then
       root_title: $root_title,
       planned_tree: [
         ($root_title + "/AGENTS.md"),
-        ($root_title + "/INDEX"),
+        ($root_title + "/INDEX [sheet]"),
         ($root_title + "/LOG"),
-        ($root_title + "/SOURCES"),
+        ($root_title + "/SOURCES [sheet]"),
         ($root_title + "/raw/docs"),
         ($root_title + "/raw/articles"),
         ($root_title + "/raw/repos"),

@@ -23,6 +23,13 @@ This Wiki is a Lark/Feishu implementation of a Karpathy-style LLM Wiki. It store
 - If a new source conflicts with an existing claim, add or update `wiki/disputed`.
 - Import/Stage only means a source is recorded in `raw` and `SOURCES`; it is not compiled.
 - Compile means claims are integrated into relevant `wiki/*` pages, `INDEX`, `SOURCES`, and `LOG`.
+- `INDEX` and `SOURCES` are table manifests; new or rebuilt Wikis must use Feishu spreadsheet sheets, with Markdown document tables only as legacy compatibility fallback.
+- Compile must keep `INDEX` directory rows synchronized with real `wiki/*` pages. Updating only the Sources row is incomplete.
+- After every compile, run `wiki-structure-lint`; `INDEX` sheet Page rows must exactly match real `wiki/*` directory children in both directions.
+- Full `wiki-health` is a heavier health audit and does not replace the per-compile structure lint gate.
+- All visible refs in tables and prose must be clickable links to the real Lark/Wiki/doc target.
+- Last-updated fields must be second-precision timestamps with timezone, not date-only values.
+- Multi-value `Compiled Into` / `compiled_into` cells must use one clickable ref per line.
 - `compiled_unverified` is the only allowed status before Coverage Audit completes.
 - `SOURCES.imported_at` is immutable; later state changes update `updated_at`.
 - `INDEX` source rows are upserted by `Source ID`, not appended as duplicates.
@@ -97,8 +104,10 @@ Create entity/concept pages only when the item is central to multiple sources, n
 4. Extract atomic claims with claim IDs.
 5. Update relevant `wiki/entities`, `wiki/concepts`, `wiki/comparisons`, `wiki/overviews`, `wiki/decisions`, or `wiki/syntheses`.
 6. Add or update `wiki/disputed` for conflicts.
-7. Update `INDEX`, `SOURCES`, and `LOG`.
-8. Complete a Coverage Audit.
+7. Run INDEX 目录同步 for every created or updated compiled page, including Concepts, Entities, Comparisons, Overviews, Syntheses, and Audits.
+8. Update the source row in `INDEX`, then update `SOURCES` and `LOG`.
+9. Run `wiki-structure-lint` and require zero structure failures, especially `INDEX` vs real `wiki/*` directory consistency.
+10. Complete a Coverage Audit.
 
 ## Coverage Audit
 

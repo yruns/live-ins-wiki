@@ -10,6 +10,21 @@ from lark_markdown import normalize_lark_tables
 
 
 SOURCE_HEADERS = ["Page", "Source ID", "Type", "Summary", "Compiled Into", "Status", "Last Updated"]
+CATALOG_HEADERS = ["Page", "Summary", "Source Count", "Last Updated", "Review State"]
+DECISION_HEADERS = ["Page", "Summary", "Status", "Last Updated", "Review State"]
+DISPUTED_HEADERS = ["Page", "Claim", "Status", "Last Updated", "Needs Human Review"]
+AUDIT_HEADERS = ["Page", "Target Source", "Status", "Last Updated"]
+SECTION_HEADERS = {
+    "Sources": SOURCE_HEADERS,
+    "Concepts": CATALOG_HEADERS,
+    "Entities": CATALOG_HEADERS,
+    "Comparisons": CATALOG_HEADERS,
+    "Overviews": CATALOG_HEADERS,
+    "Syntheses": CATALOG_HEADERS,
+    "Decisions": DECISION_HEADERS,
+    "Disputed": DISPUTED_HEADERS,
+    "Audits": AUDIT_HEADERS,
+}
 
 
 def escape_cell(value: str) -> str:
@@ -64,6 +79,43 @@ def source_values(args: argparse.Namespace) -> dict[str, str]:
         "Status": args.status,
         "Last Updated": args.last_updated,
     }
+
+
+def row_values(args: argparse.Namespace, headers: list[str]) -> dict[str, str]:
+    if headers == SOURCE_HEADERS:
+        return source_values(args)
+    if headers == CATALOG_HEADERS:
+        return {
+            "Page": args.page,
+            "Summary": args.summary,
+            "Source Count": args.source_count,
+            "Last Updated": args.last_updated,
+            "Review State": args.review_state,
+        }
+    if headers == DECISION_HEADERS:
+        return {
+            "Page": args.page,
+            "Summary": args.summary,
+            "Status": args.status,
+            "Last Updated": args.last_updated,
+            "Review State": args.review_state,
+        }
+    if headers == DISPUTED_HEADERS:
+        return {
+            "Page": args.page,
+            "Claim": args.claim,
+            "Status": args.status,
+            "Last Updated": args.last_updated,
+            "Needs Human Review": args.needs_human_review,
+        }
+    if headers == AUDIT_HEADERS:
+        return {
+            "Page": args.page,
+            "Target Source": args.target_source,
+            "Status": args.status,
+            "Last Updated": args.last_updated,
+        }
+    raise SystemExit("unsupported INDEX section")
 
 
 def find_section(lines: list[str], section: str) -> tuple[int, int]:
@@ -140,22 +192,30 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--section", required=True)
     parser.add_argument("--key-column", required=True)
     parser.add_argument("--page", required=True)
-    parser.add_argument("--source-id", required=True)
-    parser.add_argument("--type", required=True)
+    parser.add_argument("--source-id", default="-")
+    parser.add_argument("--type", default="-")
     parser.add_argument("--summary", default="-")
     parser.add_argument("--compiled-into", default="-")
     parser.add_argument("--status", default="-")
+    parser.add_argument("--source-count", default="-")
+    parser.add_argument("--review-state", default="-")
+    parser.add_argument("--claim", default="-")
+    parser.add_argument("--needs-human-review", default="-")
+    parser.add_argument("--target-source", default="-")
     parser.add_argument("--last-updated", default="-")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    if args.section != "Sources":
-        raise SystemExit("only --section Sources is currently supported")
-    if args.key_column not in SOURCE_HEADERS:
+    if args.section not in SECTION_HEADERS:
+        raise SystemExit(f"unknown section: {args.section}")
+    headers = SECTION_HEADERS[args.section]
+    if args.key_column not in headers:
         raise SystemExit(f"unknown key column: {args.key_column}")
-    sys.stdout.write(upsert(sys.stdin.read(), args.section, SOURCE_HEADERS, args.key_column, source_values(args)))
+    if args.section == "Sources" and (args.source_id == "-" or args.type == "-"):
+        raise SystemExit("--source-id and --type are required for Sources")
+    sys.stdout.write(upsert(sys.stdin.read(), args.section, headers, args.key_column, row_values(args, headers)))
     return 0
 
 

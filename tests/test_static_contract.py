@@ -458,6 +458,86 @@ class StaticContractTest(unittest.TestCase):
         self.assertIn("New \\| summary", result.stdout)
         self.assertIn("| raw/docs/A | SRC-1 | docx |", result.stdout)
 
+    def test_index_upsert_updates_concepts_and_overviews(self) -> None:
+        first = subprocess.run(
+            [
+                "python3",
+                "scripts/index_upsert.py",
+                "--section",
+                "Concepts",
+                "--key-column",
+                "Page",
+                "--page",
+                "wiki/concepts/revenue-bundles",
+                "--summary",
+                "Old concept",
+                "--source-count",
+                "1",
+                "--last-updated",
+                "2026-05-24",
+                "--review-state",
+                "unreviewed",
+            ],
+            cwd=ROOT,
+            input=read("references/templates/INDEX.md"),
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        second = subprocess.run(
+            [
+                "python3",
+                "scripts/index_upsert.py",
+                "--section",
+                "Concepts",
+                "--key-column",
+                "Page",
+                "--page",
+                "wiki/concepts/revenue-bundles",
+                "--summary",
+                "Revenue | bundles",
+                "--source-count",
+                "2",
+                "--last-updated",
+                "2026-05-25",
+                "--review-state",
+                "reviewed",
+            ],
+            cwd=ROOT,
+            input=first.stdout,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        overview = subprocess.run(
+            [
+                "python3",
+                "scripts/index_upsert.py",
+                "--section",
+                "Overviews",
+                "--key-column",
+                "Page",
+                "--page",
+                "wiki/overviews/revenue-feature-portfolio",
+                "--summary",
+                "Feature portfolio",
+                "--source-count",
+                "2",
+                "--last-updated",
+                "2026-05-25",
+                "--review-state",
+                "unreviewed",
+            ],
+            cwd=ROOT,
+            input=second.stdout,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        self.assertEqual(overview.stdout.count("wiki/concepts/revenue-bundles"), 1)
+        self.assertIn("| wiki/concepts/revenue-bundles | Revenue \\| bundles | 2 | 2026-05-25 | reviewed |", overview.stdout)
+        self.assertIn("| wiki/overviews/revenue-feature-portfolio | Feature portfolio | 2 | 2026-05-25 | unreviewed |", overview.stdout)
+
     def test_wiki_registry_records_recent_wikis_and_resolves_current(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             record = [
@@ -613,6 +693,7 @@ class StaticContractTest(unittest.TestCase):
     def test_lark_script_exposes_compounding_wiki_workflow(self) -> None:
         script = read("scripts/lark_wiki.sh")
         functions = [
+            "lw_wiki_create_node_typed",
             "lw_wiki_stage_lark_doc",
             "lw_wiki_stage_local_file",
             "lw_wiki_compile_source_plan",
@@ -620,10 +701,13 @@ class StaticContractTest(unittest.TestCase):
             "lw_wiki_query_plan",
             "lw_wiki_read_pages",
             "lw_wiki_read_raw",
+            "lw_wiki_structure_lint",
             "lw_wiki_health",
             "lw_wiki_bootstrap_root",
             "lw_wiki_manifest_upsert",
             "lw_wiki_manifest_append",
+            "lw_wiki_index_upsert_page",
+            "lw_wiki_index_upsert_audit",
             "lw_wiki_registry_list",
             "lw_wiki_registry_current",
             "lw_wiki_registry_record",
@@ -652,10 +736,54 @@ class StaticContractTest(unittest.TestCase):
         self.assertIn("wiki-registry-current", script)
         self.assertIn("wiki-registry-list", script)
 
+    def test_compile_contract_requires_full_index_sync(self) -> None:
+        skill = read("SKILL.md")
+        workflows = read("references/workflows.md")
+        agents = read("references/templates/AGENTS.md")
+        combined = "\n".join([skill, workflows, agents])
+        self.assertIn("lw_wiki_index_upsert_page", script := read("scripts/lark_wiki.sh"))
+        self.assertIn("wiki-index-upsert-page", script)
+        self.assertIn("wiki-index-upsert-audit", script)
+        self.assertIn("INDEX", combined)
+        self.assertIn("Concepts", combined)
+        self.assertIn("Overviews", combined)
+        self.assertIn("目录同步", combined)
+        self.assertIn("spreadsheet", combined.lower())
+        self.assertIn("YYYY-MM-DDTHH:MM:SS+08:00", combined)
+        self.assertIn("可点击", combined)
+        self.assertIn("换行", combined)
+        self.assertIn("Compiled Into", combined)
+        self.assertIn("wiki-health", combined)
+        self.assertIn("双向完全一致", combined)
+        self.assertIn("_lw_wiki_lint_index_catalog", script)
+        self.assertIn("missing real page", script)
+        self.assertIn("stale page", script)
+
+    def test_structure_lint_is_split_from_full_health(self) -> None:
+        script = read("scripts/lark_wiki.sh")
+        wrapper = read("scripts/wiki_structure_lint.sh")
+        skill = read("SKILL.md")
+        workflows = read("references/workflows.md")
+        combined = "\n".join([skill, workflows])
+        self.assertIn("lw_wiki_structure_lint", script)
+        self.assertIn("wiki-structure-lint", script)
+        self.assertIn("_lw_wiki_lint_index_catalog", script)
+        self.assertIn("lw_wiki_structure_lint", wrapper)
+        self.assertIn("wiki-structure-lint", combined)
+        self.assertIn("每次 Compile 后必须运行", combined)
+        self.assertIn("完整 `wiki-health`", combined)
+
+    def test_lark_index_helpers_use_second_precision_timestamps(self) -> None:
+        script = read("scripts/lark_wiki.sh")
+        self.assertIn('local last_updated="${6:-$(_lw_now)}"', script)
+        self.assertIn('local last_updated="${5:-$(_lw_now)}"', script)
+        self.assertIn('--arg last_updated "$(_lw_now)"', script)
+        self.assertIn('--last-updated "$(_lw_now)"', script)
+
     def test_init_dry_run_plans_full_tree(self) -> None:
         init = read("scripts/init_lark_wiki_tree.sh")
         for item in [
-            '"/SOURCES"',
+            '"/SOURCES [sheet]"',
             '"/raw/extracts"',
             '"/raw/manifests"',
             '"/wiki/syntheses"',
@@ -664,6 +792,17 @@ class StaticContractTest(unittest.TestCase):
         ]:
             with self.subTest(item=item):
                 self.assertIn(item, init)
+
+    def test_init_creates_index_and_sources_as_sheets(self) -> None:
+        script = read("scripts/lark_wiki.sh")
+        init = read("scripts/init_lark_wiki_tree.sh")
+        self.assertIn("_lw_sheet_init_index", script)
+        self.assertIn("_lw_sheet_init_sources", script)
+        self.assertIn("_lw_wiki_standard_child_obj_type", script)
+        self.assertRegex(script, r'lw_wiki_create_node_typed "\$space_id" "\$root_node" "INDEX" sheet')
+        self.assertRegex(script, r'lw_wiki_create_node_typed "\$space_id" "\$root_node" "SOURCES" sheet')
+        self.assertIn("INDEX [sheet]", init)
+        self.assertIn("SOURCES [sheet]", init)
 
 
 if __name__ == "__main__":
