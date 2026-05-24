@@ -26,6 +26,8 @@ This Wiki is a Lark/Feishu implementation of a Karpathy-style LLM Wiki. It store
 - `compiled_unverified` is the only allowed status before Coverage Audit completes.
 - `SOURCES.imported_at` is immutable; later state changes update `updated_at`.
 - `INDEX` source rows are upserted by `Source ID`, not appended as duplicates.
+- Before asking the user for a target Wiki, inspect `~/.lark-llm-wiki/registry.json` or run `lw_wiki_registry_current`.
+- A registry `current` Wiki or uniquely matched registry name is an explicit enough target; ambiguous or missing registry entries still require user confirmation.
 - Destructive edits require a short write plan before execution.
 - Never write Lark access tokens, app secrets, cookies, auth headers, personal credentials, or debug secrets into Wiki pages, `SOURCES`, `INDEX`, or `LOG`.
 
@@ -107,6 +109,10 @@ A source is not `compiled` until every key claim has an audit status.
 ## Query Workflow
 
 Use index-first selective reading. Read `INDEX` and `SOURCES`, choose compiled pages, then read raw only when compiled pages are insufficient. Answers should cite compiled pages first and raw fallback second.
+
+## Recent Wiki Registry
+
+Recent roots are stored locally under `~/.lark-llm-wiki/registry.json`. Use `lw_wiki_registry_list`, `lw_wiki_registry_current`, and `lw_wiki_registry_record` to inspect or update it. Commands may use `@current` when registry state is unambiguous.
 
 ## Health
 

@@ -28,7 +28,35 @@
    - `wiki/disputed`
    - `wiki/audits`
 4. 不在知识空间根部创建入口，不创建独立知识空间。
-5. 初始化后把项目入口 URL、space_id 和 root node token 交还给用户或记录在当前任务上下文，不写进通用 skill。
+5. 初始化后把项目入口 URL、space_id 和 root node token 写入 `~/.lark-llm-wiki/registry.json`，并交还给用户。
+
+## Recent Wiki Registry
+
+本地 registry 目录是 `~/.lark-llm-wiki`，可用 `LARK_LLM_WIKI_HOME` 覆盖。结构化入口文件是 `registry.json`：
+
+```json
+{
+  "version": 1,
+  "current": "root_node_token",
+  "wikis": [
+    {
+      "name": "LLM Wiki 名称",
+      "root_url": "https://.../wiki/...",
+      "space_id": "...",
+      "root_node": "...",
+      "last_accessed_at": "..."
+    }
+  ]
+}
+```
+
+使用规则：
+
+- 新请求需要目标 Wiki 时，先运行 `lw_wiki_registry_current` 或 `lw_wiki_registry_list`。
+- 如果 registry 有明确 current，或用户给的名称 / root URL 能唯一解析，可以直接使用该 root，并在输出里说明。
+- 如果 registry 为空、current 不存在、或名称匹配多个 Wiki，必须询问用户。
+- `lw_wiki_query_plan`、`lw_wiki_health`、`lw_wiki_lint_plan`、`lw_wiki_graph_plan`、`lw_wiki_drift_plan` 支持 `@current` 或 registry 中的名称作为 root selector。
+- 每次成功解析 Wiki root 时，脚本会自动 upsert registry，更新最近访问时间。
 
 ## Stage / Import
 

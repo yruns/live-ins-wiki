@@ -28,17 +28,20 @@ metadata:
 - `INDEX` 是内容导航入口，query 先读它；source 行按 `Source ID` upsert，不能长期 append 重复行。
 - `LOG` 是追加式时间线，格式稳定。
 - `AGENTS.md` 是该具体 Wiki 的 runtime schema；初始化后优先遵守目标 Wiki 里的 `AGENTS.md`，再回退到本 skill 默认规则。
+- `~/.lark-llm-wiki/registry.json` 记录最近访问过的 Lark LLM Wiki，包括 root URL、名称、space_id、root node 和最近访问时间。
 
 ## 先读什么
 
 - 初始化或改结构：读 `references/schema.md`、`references/workflows.md`。
+- 任何需要目标 Wiki 的请求：先看 `~/.lark-llm-wiki/registry.json` 或运行 `scripts/lark_wiki.sh wiki-registry-current` / `wiki-registry-list`。
 - 编译来源：读 `references/workflows.md` 的 Compile / Audit，并使用 `references/templates/source-page.md` 等模板。
 - 查询知识：先用 `lw_wiki_query_plan`，再按计划 `lw_wiki_read_pages` / `lw_wiki_read_raw`。
 - 健康检查：先跑 `lw_wiki_health`，语义问题再用 `lw_wiki_lint_plan` 交给 LLM 判断。
 
 ## 硬规则
 
-- 不能隐式选择目标 Wiki。新增文档、创建页面、导入来源、移动文档或创建快捷方式前，必须确认目标 Wiki space、项目入口和父节点。
+- 不能从聊天历史、示例命令或猜测中隐式选择目标 Wiki。先查 `~/.lark-llm-wiki/registry.json`；如果 registry 有明确 current 或用户给了可唯一解析的名称 / root URL，可以直接使用并在输出里说明选中的 Wiki。若 registry 为空或候选不唯一，再问用户。
+- 新增文档、创建页面、导入来源、移动文档或创建快捷方式前，目标 Wiki 必须来自用户本轮明确指定、registry current、或 registry 中唯一匹配的名称。
 - 不能随意创建独立知识库空间。新建 LLM Wiki 必须挂在用户确认的已有大知识库文档节点下面，以文件 / 子文件形式展开。
 - 不能用一个 Lark 文档加链接冒充 Wiki；唯一合法结构是真实 Lark Wiki node tree。
 - `/wiki/` token 必须先解析，不能直接当 doc token 用。
@@ -112,6 +115,11 @@ scripts/lark_wiki.sh wiki-health "$LLM_WIKI_ROOT"
 scripts/lark_wiki.sh wiki-lint-plan "$LLM_WIKI_ROOT"
 scripts/lark_wiki.sh wiki-graph-plan "$LLM_WIKI_ROOT"
 scripts/lark_wiki.sh wiki-drift-plan "$LLM_WIKI_ROOT"
+
+# 最近访问知识库 registry，默认目录 ~/.lark-llm-wiki
+scripts/lark_wiki.sh wiki-registry-list
+scripts/lark_wiki.sh wiki-registry-current
+scripts/lark_wiki.sh wiki-registry-record "$LLM_WIKI_ROOT" "策略知识库"
 ```
 
 也可以在 bash 中 source：
@@ -120,6 +128,7 @@ scripts/lark_wiki.sh wiki-drift-plan "$LLM_WIKI_ROOT"
 source scripts/lark_wiki.sh
 lw_wiki_stage_lark_doc "$LLM_WIKI_ROOT" "$SOURCE_DOC_OR_WIKI_URL" docs
 lw_wiki_query_plan "$LLM_WIKI_ROOT" "GLUP 是什么"
+lw_wiki_query_plan @current "GLUP 是什么"
 ```
 
 直接用 `sh scripts/lark_wiki.sh ...` 或 `zsh scripts/lark_wiki.sh ...` 会自动转到 bash；在 zsh 中 `source` 会被拒绝，因为 helper 函数使用 bash 语法。
@@ -165,7 +174,7 @@ lw_wiki_query_plan "$LLM_WIKI_ROOT" "GLUP 是什么"
 ```bash
 python3 -m unittest tests/test_static_contract.py
 bash -n scripts/lark_wiki.sh scripts/init_lark_wiki_tree.sh
-python3 -m py_compile scripts/extract_local_file.py
+python3 -m py_compile scripts/extract_local_file.py scripts/manifest_upsert.py scripts/source_id_next.py scripts/index_upsert.py scripts/wiki_registry.py
 python3 /Users/bytedance/.codex/skills/.system/skill-creator/scripts/quick_validate.py .
 python3 /Users/bytedance/.codex/skills/.system/skill-creator/scripts/quick_validate.py /Users/bytedance/.codex/skills/llm-wiki-lark
 ```

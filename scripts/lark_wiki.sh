@@ -44,6 +44,7 @@ LW_PYTHON="${LLM_WIKI_PYTHON:-}"
 LW_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LW_SKILL_DIR="$(cd "$LW_SCRIPT_DIR/.." && pwd)"
 LW_TEMPLATE_DIR="$LW_SKILL_DIR/references/templates"
+LW_REGISTRY_HOME="${LARK_LLM_WIKI_HOME:-$HOME/.lark-llm-wiki}"
 LW_RAW_CATEGORIES=(docs articles repos meetings assets extracts manifests)
 LW_WIKI_CATEGORIES=(sources entities concepts comparisons overviews decisions syntheses disputed audits)
 
@@ -93,6 +94,48 @@ _lw_slug() {
 
 _lw_escape_sed_replacement() {
   printf '%s\n' "$1" | sed -e 's/[\/&]/\\&/g'
+}
+
+_lw_wiki_registry_cmd() {
+  local py
+  py="$(_lw_python)"
+  [[ -n "$py" ]] || {
+    printf '缺少 python3，无法读取 ~/.lark-llm-wiki registry\n' >&2
+    return 127
+  }
+  "$py" "$LW_SCRIPT_DIR/wiki_registry.py" --home "$LW_REGISTRY_HOME" "$@"
+}
+
+_lw_wiki_registry_record_parts() {
+  local root_url="$1"
+  local root_title="$2"
+  local space_id="$3"
+  local root_node="$4"
+  local origin="${5:-$root_url}"
+  _lw_wiki_registry_cmd record \
+    --root-url "$root_url" \
+    --name "${root_title:-$root_node}" \
+    --space-id "$space_id" \
+    --root-node "$root_node" \
+    --origin "$origin" >/dev/null
+}
+
+_lw_wiki_registry_resolve_selector() {
+  local selector="${1:-@current}"
+  case "$selector" in
+    ""|"-"|"@current"|"@recent"|current|recent|default)
+      _lw_wiki_registry_cmd resolve "$selector" --field root_url
+      return $?
+      ;;
+    http*/wiki/*)
+      printf '%s\n' "$selector"
+      return 0
+      ;;
+  esac
+  if _lw_wiki_registry_cmd resolve "$selector" --field root_url 2>/dev/null; then
+    return 0
+  fi
+  printf '%s\n' "$selector"
 }
 
 _lw_source_id() {
@@ -505,7 +548,9 @@ lw_wiki_find_child() {
 _lw_wiki_root_parts() {
   _lw_need jq
   local wiki_root="$1"
+  local auto_record="${2:-1}"
   local root_json space_id root_node root_title root_url
+  wiki_root="$(_lw_wiki_registry_resolve_selector "$wiki_root")" || return $?
   root_json="$(lw_wiki_get_node "$wiki_root")"
   space_id="$(printf '%s\n' "$root_json" | _lw_node_field space_id)"
   root_node="$(printf '%s\n' "$root_json" | _lw_node_field node_token)"
@@ -515,12 +560,54 @@ _lw_wiki_root_parts() {
     printf '无法解析 LLM Wiki 根节点: %s\n' "$wiki_root" >&2
     return 1
   }
+  if [[ "$auto_record" != "0" ]]; then
+    _lw_wiki_registry_record_parts "$root_url" "$root_title" "$space_id" "$root_node" "$wiki_root" || true
+  fi
   jq -n \
     --arg space_id "$space_id" \
     --arg root_node "$root_node" \
     --arg root_title "$root_title" \
     --arg root_url "$root_url" \
     '{space_id:$space_id, root_node:$root_node, root_title:$root_title, root_url:$root_url}'
+}
+
+lw_wiki_registry_list() {
+  _lw_wiki_registry_cmd list "$@"
+}
+
+lw_wiki_registry_current() {
+  _lw_wiki_registry_cmd current "$@"
+}
+
+lw_wiki_registry_resolve() {
+  _lw_wiki_registry_cmd resolve "$@"
+}
+
+lw_wiki_registry_forget() {
+  _lw_wiki_registry_cmd forget "$@"
+}
+
+lw_wiki_registry_record() {
+  _lw_need jq
+  local wiki_root="${1:-}"
+  local name="${2:-}"
+  local root_parts space_id root_node root_title root_url
+  if [[ -z "$wiki_root" ]]; then
+    printf '用法: lw_wiki_registry_record LLM_WIKI_ROOT_URL [NAME]\n' >&2
+    return 2
+  fi
+  root_parts="$(_lw_wiki_root_parts "$wiki_root" 0)" || return $?
+  space_id="$(printf '%s\n' "$root_parts" | jq -r '.space_id')"
+  root_node="$(printf '%s\n' "$root_parts" | jq -r '.root_node')"
+  root_title="$(printf '%s\n' "$root_parts" | jq -r '.root_title')"
+  root_url="$(printf '%s\n' "$root_parts" | jq -r '.root_url')"
+  [[ -n "$name" ]] || name="$root_title"
+  _lw_wiki_registry_cmd record \
+    --root-url "$root_url" \
+    --name "$name" \
+    --space-id "$space_id" \
+    --root-node "$root_node" \
+    --origin "$wiki_root"
 }
 
 _lw_wiki_child_json() {
@@ -736,14 +823,18 @@ _lw_wiki_context_list_children() {
 
 lw_wiki_query_plan() {
   _lw_need jq
-  local wiki_root="$1"
-  local query="$2"
+  local wiki_root="${1:-}"
+  local query="${2:-}"
   local root_parts space_id root_node
   local index_json sources_json wiki_json wiki_node raw_json raw_node category_json category_node category
   local log_json
 
+  if [[ "$#" -eq 1 ]]; then
+    wiki_root="@current"
+    query="$1"
+  fi
   if [[ -z "$wiki_root" || -z "$query" ]]; then
-    printf '用法: lw_wiki_query_plan LLM_WIKI_ROOT_URL QUERY\n' >&2
+    printf '用法: lw_wiki_query_plan [LLM_WIKI_ROOT_URL|@current|NAME] QUERY\n' >&2
     return 2
   fi
 
@@ -814,12 +905,12 @@ lw_wiki_query_plan() {
 }
 
 lw_wiki_query() {
-  if [[ "$#" -lt 2 ]]; then
-    printf '用法: lw_wiki_query LLM_WIKI_ROOT_URL QUERY\n' >&2
+  if [[ "$#" -lt 1 ]]; then
+    printf '用法: lw_wiki_query [LLM_WIKI_ROOT_URL|@current|NAME] QUERY\n' >&2
     return 2
   fi
   printf 'lw_wiki_query 已改为导航包别名；不会自动读取前 N 个页面。\n' >&2
-  lw_wiki_query_plan "$1" "$2"
+  lw_wiki_query_plan "$@"
 }
 
 lw_wiki_read_pages() {
@@ -1185,11 +1276,15 @@ _lw_wiki_print_catalog() {
 
 lw_wiki_compile_source_plan() {
   _lw_need jq
-  local wiki_root="$1"
-  local source_ref="$2"
+  local wiki_root="${1:-}"
+  local source_ref="${2:-}"
   local root_parts space_id root_node
+  if [[ "$#" -eq 1 ]]; then
+    wiki_root="@current"
+    source_ref="$1"
+  fi
   if [[ -z "$wiki_root" || -z "$source_ref" ]]; then
-    printf '用法: lw_wiki_compile_source_plan LLM_WIKI_ROOT_URL SOURCE_ID_OR_TITLE\n' >&2
+    printf '用法: lw_wiki_compile_source_plan [LLM_WIKI_ROOT_URL|@current|NAME] SOURCE_ID_OR_TITLE\n' >&2
     return 2
   fi
   root_parts="$(_lw_wiki_root_parts "$wiki_root")" || return $?
@@ -1215,11 +1310,15 @@ lw_wiki_compile_source_plan() {
 
 lw_wiki_audit_source_coverage_plan() {
   _lw_need jq
-  local wiki_root="$1"
-  local source_ref="$2"
+  local wiki_root="${1:-}"
+  local source_ref="${2:-}"
   local root_parts space_id root_node
+  if [[ "$#" -eq 1 ]]; then
+    wiki_root="@current"
+    source_ref="$1"
+  fi
   if [[ -z "$wiki_root" || -z "$source_ref" ]]; then
-    printf '用法: lw_wiki_audit_source_coverage_plan LLM_WIKI_ROOT_URL SOURCE_ID_OR_TITLE\n' >&2
+    printf '用法: lw_wiki_audit_source_coverage_plan [LLM_WIKI_ROOT_URL|@current|NAME] SOURCE_ID_OR_TITLE\n' >&2
     return 2
   fi
   root_parts="$(_lw_wiki_root_parts "$wiki_root")" || return $?
@@ -1242,10 +1341,10 @@ lw_wiki_audit_source_coverage_plan() {
 
 lw_wiki_lint_plan() {
   _lw_need jq
-  local wiki_root="$1"
+  local wiki_root="${1:-@current}"
   local root_parts space_id root_node
   if [[ -z "$wiki_root" ]]; then
-    printf '用法: lw_wiki_lint_plan LLM_WIKI_ROOT_URL\n' >&2
+    printf '用法: lw_wiki_lint_plan [LLM_WIKI_ROOT_URL|@current|NAME]\n' >&2
     return 2
   fi
   root_parts="$(_lw_wiki_root_parts "$wiki_root")" || return $?
@@ -1270,10 +1369,10 @@ lw_wiki_lint_plan() {
 
 lw_wiki_graph_plan() {
   _lw_need jq
-  local wiki_root="$1"
+  local wiki_root="${1:-@current}"
   local root_parts space_id root_node
   if [[ -z "$wiki_root" ]]; then
-    printf '用法: lw_wiki_graph_plan LLM_WIKI_ROOT_URL\n' >&2
+    printf '用法: lw_wiki_graph_plan [LLM_WIKI_ROOT_URL|@current|NAME]\n' >&2
     return 2
   fi
   root_parts="$(_lw_wiki_root_parts "$wiki_root")" || return $?
@@ -1296,10 +1395,10 @@ lw_wiki_graph_plan() {
 
 lw_wiki_drift_plan() {
   _lw_need jq
-  local wiki_root="$1"
+  local wiki_root="${1:-@current}"
   local root_parts space_id root_node
   if [[ -z "$wiki_root" ]]; then
-    printf '用法: lw_wiki_drift_plan LLM_WIKI_ROOT_URL\n' >&2
+    printf '用法: lw_wiki_drift_plan [LLM_WIKI_ROOT_URL|@current|NAME]\n' >&2
     return 2
   fi
   root_parts="$(_lw_wiki_root_parts "$wiki_root")" || return $?
@@ -1321,12 +1420,12 @@ lw_wiki_drift_plan() {
 
 lw_wiki_health() {
   _lw_need jq
-  local wiki_root="$1"
+  local wiki_root="${1:-@current}"
   local root_parts space_id root_node raw_node wiki_node
   local failures=0 warnings=0 child node obj category category_node children duplicate_count source_obj index_obj log_obj
   local node_json title obj_token obj_type body first_line source_text
   if [[ -z "$wiki_root" ]]; then
-    printf '用法: lw_wiki_health LLM_WIKI_ROOT_URL\n' >&2
+    printf '用法: lw_wiki_health [LLM_WIKI_ROOT_URL|@current|NAME]\n' >&2
     return 2
   fi
   root_parts="$(_lw_wiki_root_parts "$wiki_root")" || return $?
@@ -1472,6 +1571,7 @@ lw_wiki_init_tree() {
   root_json="$(lw_wiki_create_node "$space_id" "$parent_node_token" "$root_title")"
   root_node="$(printf '%s\n' "$root_json" | _lw_node_field node_token)"
   root_obj="$(printf '%s\n' "$root_json" | _lw_node_field obj_token)"
+  _lw_wiki_registry_record_parts "https://bytedance.larkoffice.com/wiki/$root_node" "$root_title" "$space_id" "$root_node" "init" || true
   _lw_wiki_emit_created root "$root_title" "$root_json"
   lw_write "$root_obj" - >/dev/null <<EOF
 # $root_title
@@ -1629,7 +1729,8 @@ lw_usage() {
   wiki-stage-lark-doc, wiki-stage-local-file, wiki-compile-source-plan,
   wiki-audit-source-coverage-plan, wiki-query-plan, wiki-read-pages,
   wiki-read-raw, wiki-health, wiki-lint-plan, wiki-graph-plan,
-  wiki-drift-plan, wiki-manifest-upsert
+  wiki-drift-plan, wiki-manifest-upsert, wiki-registry-list,
+  wiki-registry-current, wiki-registry-record
 
 函数模式:
   lw_search QUERY [PAGE_SIZE]
@@ -1648,18 +1749,23 @@ lw_usage() {
   lw_wiki_create_shortcut SPACE_ID PARENT_NODE_TOKEN ORIGIN_NODE_TOKEN [OBJ_TYPE] [TITLE]
   lw_wiki_add_source_shortcut SPACE_ID PARENT_NODE_TOKEN WIKI_OR_DOC_URL [TITLE]
   lw_wiki_find_child SPACE_ID PARENT_NODE_TOKEN TITLE
-  lw_wiki_query_plan LLM_WIKI_ROOT_URL QUERY
-  lw_wiki_query LLM_WIKI_ROOT_URL QUERY
+  lw_wiki_registry_list [--field FIELD]
+  lw_wiki_registry_current [--field FIELD]
+  lw_wiki_registry_resolve [SELECTOR] [--field FIELD]
+  lw_wiki_registry_record LLM_WIKI_ROOT_URL [NAME]
+  lw_wiki_registry_forget SELECTOR
+  lw_wiki_query_plan [LLM_WIKI_ROOT_URL|@current|NAME] QUERY
+  lw_wiki_query [LLM_WIKI_ROOT_URL|@current|NAME] QUERY
   lw_wiki_read_pages PAGE_OR_NODE_URL_OR_DOC_TOKEN [...]
   lw_wiki_read_raw RAW_URL_OR_TOKEN [...]
   lw_wiki_stage_lark_doc LLM_WIKI_ROOT_URL WIKI_OR_DOC_URL [raw-category] [TITLE]
   lw_wiki_stage_local_file LLM_WIKI_ROOT_URL LOCAL_FILE [raw-category] [TITLE] [DRIVE_FOLDER_TOKEN]
-  lw_wiki_compile_source_plan LLM_WIKI_ROOT_URL SOURCE_ID_OR_TITLE
-  lw_wiki_audit_source_coverage_plan LLM_WIKI_ROOT_URL SOURCE_ID_OR_TITLE
-  lw_wiki_health LLM_WIKI_ROOT_URL
-  lw_wiki_lint_plan LLM_WIKI_ROOT_URL
-  lw_wiki_graph_plan LLM_WIKI_ROOT_URL
-  lw_wiki_drift_plan LLM_WIKI_ROOT_URL
+  lw_wiki_compile_source_plan [LLM_WIKI_ROOT_URL|@current|NAME] SOURCE_ID_OR_TITLE
+  lw_wiki_audit_source_coverage_plan [LLM_WIKI_ROOT_URL|@current|NAME] SOURCE_ID_OR_TITLE
+  lw_wiki_health [LLM_WIKI_ROOT_URL|@current|NAME]
+  lw_wiki_lint_plan [LLM_WIKI_ROOT_URL|@current|NAME]
+  lw_wiki_graph_plan [LLM_WIKI_ROOT_URL|@current|NAME]
+  lw_wiki_drift_plan [LLM_WIKI_ROOT_URL|@current|NAME]
   lw_wiki_manifest_upsert LLM_WIKI_ROOT_URL SOURCE_ID TITLE KIND RAW_NODE [ORIGIN] [CHECKSUM] [EXTRACTION] [SOURCE_PAGE] [COMPILED_INTO] [COMPILE_STATUS] [AUDIT_STATUS] [REVIEW_STATE] [IMPORTED_AT] [UPDATED_AT]
   lw_wiki_manifest_append LLM_WIKI_ROOT_URL SOURCE_ID TITLE KIND RAW_NODE [ORIGIN] [CHECKSUM] [EXTRACTION] [SOURCE_PAGE] [COMPILED_INTO] [COMPILE_STATUS] [AUDIT_STATUS] [REVIEW_STATE] [IMPORTED_AT] [UPDATED_AT]
   lw_wiki_import_doc_shortcut LLM_WIKI_ROOT_URL WIKI_OR_DOC_URL [raw-category] [TITLE]   # 兼容别名：stage
@@ -1676,11 +1782,13 @@ lw_usage() {
 规则:
   Wiki 写命令中的 SPACE_ID 和 PARENT_NODE_TOKEN 必须来自用户确认过的目标 Wiki。
   不要把示例、最近命令或 my_library 当成隐式目标。
+  可先查看 ~/.lark-llm-wiki/registry.json；只有 registry 中 current 或 selector 明确时才可省略 root。
   LLM Wiki 项目必须作为已有大知识库节点下的子树展开，不能随意在空间根部创建独立入口。
 
 环境变量:
   LARK_WIKI_AS=user|bot   传给 lark-cli 的身份，默认 user。
   LARK_WIKI_DRY_RUN=1     打印原始 API 请求，不执行支持 dry-run 的 Wiki API 写入。
+  LARK_LLM_WIKI_HOME=~/.lark-llm-wiki  最近访问知识库 registry 目录。
   LLM_WIKI_PYTHON=/path/python3  指定本地文件解析使用的 Python。
   LLM_WIKI_UPLOAD_FOLDER_TOKEN=token  本地文件上传到指定 Lark Drive 文件夹。
 USAGE
@@ -1709,6 +1817,11 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     wiki-create-shortcut) lw_wiki_create_shortcut "$@" ;;
     wiki-add-source-shortcut) lw_wiki_add_source_shortcut "$@" ;;
     wiki-find-child) lw_wiki_find_child "$@" ;;
+    wiki-registry-list) lw_wiki_registry_list "$@" ;;
+    wiki-registry-current) lw_wiki_registry_current "$@" ;;
+    wiki-registry-resolve) lw_wiki_registry_resolve "$@" ;;
+    wiki-registry-record) lw_wiki_registry_record "$@" ;;
+    wiki-registry-forget) lw_wiki_registry_forget "$@" ;;
     wiki-query-plan) lw_wiki_query_plan "$@" ;;
     wiki-query) lw_wiki_query "$@" ;;
     wiki-read-pages) lw_wiki_read_pages "$@" ;;

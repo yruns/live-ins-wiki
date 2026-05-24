@@ -29,6 +29,7 @@ usage() {
   LLM_WIKI_ROOT_TITLE=LLM Wiki   默认入口标题。
   LARK_WIKI_DRY_RUN=1            仅打印 API 请求，不执行创建。
   LARK_WIKI_AS=user|bot          lark-cli 身份，默认 user。
+  LARK_LLM_WIKI_HOME=~/.lark-llm-wiki  最近访问知识库 registry 目录。
 
 示例:
   scripts/init_lark_wiki_tree.sh https://bytedance.larkoffice.com/wiki/IV2OwKLMsiTcRjkA4rHcFViUn4d
@@ -134,6 +135,10 @@ existing="$(lw_wiki_list_children "$space_id" "$node_token" 50 | jq -r --arg tit
 ')"
 if [[ -n "$existing" ]]; then
   printf '已存在同名 LLM Wiki 入口，跳过创建:\n' >&2
+  existing_url="$(printf '%s\n' "$existing" | jq -r '.url // empty')"
+  if [[ -n "$existing_url" ]]; then
+    lw_wiki_registry_record "$existing_url" "$root_title" >/dev/null || true
+  fi
   printf '%s\n' "$existing"
   exit 0
 fi

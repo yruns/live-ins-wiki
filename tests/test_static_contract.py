@@ -8,7 +8,9 @@ LLM Wiki 协议上互相漂移。
 from __future__ import annotations
 
 import re
+import json
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -74,6 +76,7 @@ class StaticContractTest(unittest.TestCase):
                 "scripts/manifest_upsert.py",
                 "scripts/source_id_next.py",
                 "scripts/index_upsert.py",
+                "scripts/wiki_registry.py",
             ],
             cwd=ROOT,
             check=True,
@@ -281,6 +284,47 @@ class StaticContractTest(unittest.TestCase):
         self.assertIn("New \\| summary", second.stdout)
         self.assertIn("| raw/docs/A | SRC-1 | doc |", second.stdout)
 
+    def test_wiki_registry_records_recent_wikis_and_resolves_current(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            record = [
+                "python3",
+                "scripts/wiki_registry.py",
+                "--home",
+                tmp,
+                "record",
+                "--root-url",
+                "https://bytedance.larkoffice.com/wiki/rootA",
+                "--name",
+                "策略知识库",
+                "--space-id",
+                "space-a",
+                "--root-node",
+                "rootA",
+                "--now",
+                "2026-05-24T12:00:00+0800",
+            ]
+            subprocess.run(record, cwd=ROOT, check=True, capture_output=True, text=True)
+            subprocess.run(record[:-1] + ["2026-05-24T12:01:00+0800"], cwd=ROOT, check=True, capture_output=True, text=True)
+            current = subprocess.run(
+                ["python3", "scripts/wiki_registry.py", "--home", tmp, "current", "--field", "root_url"],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            resolved = subprocess.run(
+                ["python3", "scripts/wiki_registry.py", "--home", tmp, "resolve", "策略知识库", "--field", "root_node"],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            data = json.loads((Path(tmp) / "registry.json").read_text(encoding="utf-8"))
+            self.assertEqual(current.stdout.strip(), "https://bytedance.larkoffice.com/wiki/rootA")
+            self.assertEqual(resolved.stdout.strip(), "rootA")
+            self.assertEqual(len(data["wikis"]), 1)
+            self.assertEqual(data["wikis"][0]["access_count"], 2)
+
     def test_skill_and_templates_have_parseable_frontmatter(self) -> None:
         skill = parse_frontmatter("SKILL.md")
         self.assertEqual(skill["name"], "llm-wiki-lark")
@@ -371,6 +415,10 @@ class StaticContractTest(unittest.TestCase):
             "lw_wiki_health",
             "lw_wiki_manifest_upsert",
             "lw_wiki_manifest_append",
+            "lw_wiki_registry_list",
+            "lw_wiki_registry_current",
+            "lw_wiki_registry_record",
+            "lw_wiki_registry_resolve",
             "lw_wiki_lint_plan",
             "lw_wiki_graph_plan",
             "lw_wiki_drift_plan",
@@ -390,6 +438,10 @@ class StaticContractTest(unittest.TestCase):
         self.assertIn("graph/backlink audit", script)
         self.assertIn("source_id_next.py", script)
         self.assertIn("index_upsert.py", script)
+        self.assertIn("wiki_registry.py", script)
+        self.assertIn(".lark-llm-wiki", script)
+        self.assertIn("wiki-registry-current", script)
+        self.assertIn("wiki-registry-list", script)
 
     def test_init_dry_run_plans_full_tree(self) -> None:
         init = read("scripts/init_lark_wiki_tree.sh")
