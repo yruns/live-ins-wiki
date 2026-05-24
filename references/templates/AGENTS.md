@@ -35,7 +35,9 @@ This Wiki is a Lark/Feishu implementation of a Karpathy-style LLM Wiki. It store
 - `INDEX` source rows are upserted by `Source ID`, not appended as duplicates.
 - Before asking the user for a target Wiki, inspect `~/.lark-llm-wiki/registry.json` or run `lw_wiki_registry_current`.
 - A registry `current` Wiki or uniquely matched registry name is an explicit enough target; ambiguous or missing registry entries still require user confirmation.
+- If the user names a concrete Wiki document node and asks to initialize it, treat that node as the LLM Wiki root and run `wiki-bootstrap-root`; do not create an extra `LLM Wiki` child unless the user explicitly asks for a nested entry.
 - Before bootstrapping a user-specified existing root, verify the root layer is clean. Non-standard children outside `AGENTS.md`, `INDEX`, `LOG`, `SOURCES`, `raw`, and `wiki` require asking the user whether to delete or move them first.
+- 初始化后不要运行 `wiki-health`。Use the lightweight `wiki-structure-lint` by default; only run full health when the user explicitly asks for health or a complete health check.
 - Destructive edits require a short write plan before execution.
 - Never write Lark access tokens, app secrets, cookies, auth headers, personal credentials, or debug secrets into Wiki pages, `SOURCES`, `INDEX`, or `LOG`.
 
@@ -126,7 +128,7 @@ Recent roots are stored locally under `~/.lark-llm-wiki/registry.json`. Use `lw_
 
 ## Health
 
-Run a low-cost structure check before semantic work: directories, `INDEX`, `SOURCES`, `LOG`, YAML frontmatter, `source_refs`, empty pages, duplicate titles, and manifest coverage. Missing YAML/frontmatter or `source_refs` in core compiled pages is a failure, as is `compile_status=compiled` without completed audit metadata.
+Run lightweight `wiki-structure-lint` before semantic work and after initialization. Full `wiki-health` is heavier and reads more Lark nodes/page bodies; only run it when the user explicitly asks for health or a complete health check. Missing YAML/frontmatter or `source_refs` in core compiled pages is a failure, as is `compile_status=compiled` without completed audit metadata.
 
 ## Semantic Lint
 

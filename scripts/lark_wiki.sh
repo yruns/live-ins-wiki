@@ -45,6 +45,7 @@ LW_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LW_SKILL_DIR="$(cd "$LW_SCRIPT_DIR/.." && pwd)"
 LW_TEMPLATE_DIR="$LW_SKILL_DIR/references/templates"
 LW_REGISTRY_HOME="${LARK_LLM_WIKI_HOME:-$HOME/.lark-llm-wiki}"
+LW_BOOTSTRAP_PARALLELISM="${LARK_WIKI_BOOTSTRAP_PARALLELISM:-4}"
 LW_RAW_CATEGORIES=(docs articles repos meetings assets extracts manifests)
 LW_WIKI_CATEGORIES=(sources entities concepts comparisons overviews decisions syntheses disputed audits)
 
@@ -53,6 +54,52 @@ _lw_need() {
     printf '缺少必需命令: %s\n' "$1" >&2
     return 127
   }
+}
+
+_lw_parallel_limit() {
+  local value="${1:-1}"
+  if [[ "$value" =~ ^[1-9][0-9]*$ ]]; then
+    printf '%s\n' "$value"
+  else
+    printf '1\n'
+  fi
+}
+
+_lw_shell_join() {
+  local out="" word quoted
+  for word in "$@"; do
+    quoted="$(printf '%q' "$word")"
+    out="${out:+$out }$quoted"
+  done
+  printf '%s\n' "$out"
+}
+
+_lw_run_parallel() {
+  local max
+  max="$(_lw_parallel_limit "${1:-1}")"
+  shift || true
+  local pids=() pid cmd status running
+  status=0
+  running=0
+  for cmd in "$@"; do
+    ( eval "$cmd" ) &
+    pids+=("$!")
+    running=$((running + 1))
+    if (( running >= max )); then
+      for pid in "${pids[@]}"; do
+        wait "$pid" || status=1
+      done
+      pids=()
+      running=0
+      [[ "$status" -eq 0 ]] || return "$status"
+    fi
+  done
+  if (( running > 0 )); then
+    for pid in "${pids[@]}"; do
+      wait "$pid" || status=1
+    done
+  fi
+  return "$status"
 }
 
 _lw_api() {
@@ -1129,8 +1176,9 @@ _lw_sheet_ensure_tabs() {
       ) as $titles_after_rename
     | [
         ($titles[]
-          | select(($titles_after_rename | index(.)) == null)
-          | {addSheet: {properties: {title: .}}})
+          | . as $title
+          | select(($titles_after_rename | index($title)) == null)
+          | {addSheet: {properties: {title: $title}}})
       ]
   ')"
   _lw_sheet_batch_update "$spreadsheet_token" "$add_requests_json" >/dev/null
@@ -1158,29 +1206,38 @@ _lw_sheet_write_headers() {
     --values "$values_json" >/dev/null
 }
 
+_lw_sheet_write_headers_parallel() {
+  local spreadsheet_token="$1"
+  shift
+  local commands=() sheet_title headers_json
+  while (( $# > 0 )); do
+    if (( $# < 2 )); then
+      printf '_lw_sheet_write_headers_parallel requires SHEET_TITLE HEADERS_JSON pairs\n' >&2
+      return 2
+    fi
+    sheet_title="$1"
+    headers_json="$2"
+    shift 2
+    commands+=("$(_lw_shell_join _lw_sheet_write_headers "$spreadsheet_token" "$sheet_title" "$headers_json")")
+  done
+  _lw_run_parallel "$LW_BOOTSTRAP_PARALLELISM" "${commands[@]}"
+}
+
 _lw_sheet_init_index() {
   local spreadsheet_token="$1"
   local titles_json
   titles_json='["Sources","Concepts","Entities","Comparisons","Overviews","Decisions","Syntheses","Disputed","Audits"]'
   _lw_sheet_ensure_tabs "$spreadsheet_token" "$titles_json"
-  _lw_sheet_write_headers "$spreadsheet_token" Sources \
-    '["Page","Source ID","Type","Summary","Compiled Into","Status","Last Updated"]'
-  _lw_sheet_write_headers "$spreadsheet_token" Concepts \
-    '["Page","Summary","Source Count","Last Updated","Review State"]'
-  _lw_sheet_write_headers "$spreadsheet_token" Entities \
-    '["Page","Summary","Source Count","Last Updated","Review State"]'
-  _lw_sheet_write_headers "$spreadsheet_token" Comparisons \
-    '["Page","Summary","Source Count","Last Updated","Review State"]'
-  _lw_sheet_write_headers "$spreadsheet_token" Overviews \
-    '["Page","Summary","Source Count","Last Updated","Review State"]'
-  _lw_sheet_write_headers "$spreadsheet_token" Decisions \
-    '["Page","Summary","Status","Last Updated","Review State"]'
-  _lw_sheet_write_headers "$spreadsheet_token" Syntheses \
-    '["Page","Summary","Source Count","Last Updated","Review State"]'
-  _lw_sheet_write_headers "$spreadsheet_token" Disputed \
-    '["Page","Claim","Status","Last Updated","Needs Human Review"]'
-  _lw_sheet_write_headers "$spreadsheet_token" Audits \
-    '["Page","Target Source","Status","Last Updated"]'
+  _lw_sheet_write_headers_parallel "$spreadsheet_token" \
+    Sources '["Page","Source ID","Type","Summary","Compiled Into","Status","Last Updated"]' \
+    Concepts '["Page","Summary","Source Count","Last Updated","Review State"]' \
+    Entities '["Page","Summary","Source Count","Last Updated","Review State"]' \
+    Comparisons '["Page","Summary","Source Count","Last Updated","Review State"]' \
+    Overviews '["Page","Summary","Source Count","Last Updated","Review State"]' \
+    Decisions '["Page","Summary","Status","Last Updated","Review State"]' \
+    Syntheses '["Page","Summary","Source Count","Last Updated","Review State"]' \
+    Disputed '["Page","Claim","Status","Last Updated","Needs Human Review"]' \
+    Audits '["Page","Target Source","Status","Last Updated"]'
 }
 
 _lw_sheet_init_sources() {
@@ -2067,7 +2124,7 @@ lw_wiki_lint_plan() {
 
   printf '# Semantic Lint Plan\n\n'
   printf -- '- Completeness: partial\n\n'
-  printf '> 先运行 `lw_wiki_health` 做结构检查；本包交给 LLM 做 Semantic Lint。\n\n'
+  printf '> 先运行轻量 `lw_wiki_structure_lint` 做目录同步检查；只有用户明确提出 health / 完整健康检查时才运行 `lw_wiki_health`。\n\n'
   _lw_wiki_print_root_context "$space_id" "$root_node" 25000
   _lw_wiki_print_catalog "$space_id" "$root_node"
   printf '\n# Semantic Lint Checklist\n\n'
@@ -2397,12 +2454,110 @@ _lw_wiki_repair_existing_standard_sheet() {
   esac
 }
 
+_lw_wiki_standard_child_needs_content() {
+  local kind="$1"
+  local status="$2"
+  local obj_type="$3"
+  if [[ "$status" == "created" ]]; then
+    return 0
+  fi
+  if [[ "$obj_type" == "sheet" ]]; then
+    case "$kind" in
+      index|sources)
+        return 0
+        ;;
+    esac
+  fi
+  return 1
+}
+
+_lw_wiki_find_child_in_children() {
+  local children_json="$1"
+  local title="$2"
+  printf '%s\n' "$children_json" | jq -c --arg title "$title" '
+    (.data.items // [])
+    | map(select(.title == $title))
+    | first
+    | if . then {title, node_token, obj_token, obj_type, node_type, url, space_id, parent_node_token} else empty end
+  '
+}
+
+_lw_wiki_ensure_standard_child_resolved() {
+  local space_id="$1"
+  local parent_node="$2"
+  local title="$3"
+  local kind="$4"
+  local root_title="$5"
+  local existing="${6:-}"
+  local write_content="${7:-1}"
+  local created code msg obj_token obj_type status
+  if [[ -n "$existing" ]]; then
+    obj_token="$(printf '%s\n' "$existing" | jq -r '.obj_token // empty')"
+    obj_type="$(printf '%s\n' "$existing" | jq -r '.obj_type // empty')"
+    status="existing"
+    if [[ "$write_content" == "1" ]]; then
+      _lw_wiki_repair_existing_standard_sheet "$kind" "$title" "$obj_token" "$root_title" "$obj_type"
+    fi
+    printf '%s\n' "$existing" | jq -c --arg status "$status" '. + {status: $status}'
+    return 0
+  fi
+  obj_type="$(_lw_wiki_standard_child_obj_type "$kind")"
+  created="$(lw_wiki_create_node_typed "$space_id" "$parent_node" "$title" "$obj_type")"
+  code="$(printf '%s\n' "$created" | jq -r '.code // 0')"
+  if [[ "$code" != "0" ]]; then
+    msg="$(printf '%s\n' "$created" | jq -r '.msg // .message // "unknown error"')"
+    printf '创建标准节点失败: %s code=%s msg=%s\n' "$title" "$code" "$msg" >&2
+    printf '%s\n' "$created" >&2
+    return 1
+  fi
+  obj_token="$(printf '%s\n' "$created" | _lw_node_field obj_token)"
+  if [[ -z "$obj_token" ]]; then
+    printf '创建标准节点后缺少 obj_token: %s\n' "$title" >&2
+    printf '%s\n' "$created" >&2
+    return 1
+  fi
+  status="created"
+  if [[ "$write_content" == "1" ]]; then
+    _lw_wiki_write_standard_content "$kind" "$title" "$obj_token" "$root_title" "$obj_type"
+  fi
+  printf '%s\n' "$created" | jq -c --arg status "$status" '(.data.node // .node // .) + {status: $status}'
+}
+
+_lw_wiki_ensure_standard_child_with_children() {
+  local space_id="$1"
+  local parent_node="$2"
+  local children_json="$3"
+  local title="$4"
+  local kind="$5"
+  local root_title="$6"
+  local write_content="${7:-1}"
+  local existing
+  existing="$(_lw_wiki_find_child_in_children "$children_json" "$title")"
+  _lw_wiki_ensure_standard_child_resolved "$space_id" "$parent_node" "$title" "$kind" "$root_title" "$existing" "$write_content"
+}
+
+_lw_wiki_bootstrap_content_command() {
+  local kind="$1"
+  local title="$2"
+  local root_title="$3"
+  local child_json="$4"
+  local obj_token obj_type status
+  obj_token="$(printf '%s\n' "$child_json" | jq -r '.obj_token // empty')"
+  obj_type="$(printf '%s\n' "$child_json" | jq -r '.obj_type // empty')"
+  status="$(printf '%s\n' "$child_json" | jq -r '.status // empty')"
+  [[ -n "$obj_token" && -n "$obj_type" && -n "$status" ]] || return 0
+  if _lw_wiki_standard_child_needs_content "$kind" "$status" "$obj_type"; then
+    _lw_shell_join _lw_wiki_write_standard_content "$kind" "$title" "$obj_token" "$root_title" "$obj_type"
+  fi
+}
+
 _lw_wiki_assert_clean_bootstrap_root() {
   _lw_need jq
   local space_id="$1"
   local root_node="$2"
-  local children_json dirty
-  if ! children_json="$(lw_wiki_list_children "$space_id" "$root_node" 50)"; then
+  local children_json="${3:-}"
+  local dirty
+  if [[ -z "$children_json" ]] && ! children_json="$(lw_wiki_list_children "$space_id" "$root_node" 50)"; then
     printf '无法检查根节点子节点，已停止 bootstrap: %s\n' "$root_node" >&2
     return 1
   fi
@@ -2426,24 +2581,34 @@ _lw_wiki_ensure_standard_child() {
   local title="$3"
   local kind="$4"
   local root_title="$5"
-  local existing created obj_token obj_type
+  local existing
   existing="$(lw_wiki_find_child "$space_id" "$parent_node" "$title")"
-  if [[ -n "$existing" ]]; then
-    obj_token="$(printf '%s\n' "$existing" | jq -r '.obj_token // empty')"
-    obj_type="$(printf '%s\n' "$existing" | jq -r '.obj_type // empty')"
-    _lw_wiki_repair_existing_standard_sheet "$kind" "$title" "$obj_token" "$root_title" "$obj_type"
-    printf '%s\n' "$existing" | jq -c --arg status "existing" '. + {status: $status}'
-    return 0
-  fi
-  obj_type="$(_lw_wiki_standard_child_obj_type "$kind")"
-  created="$(lw_wiki_create_node_typed "$space_id" "$parent_node" "$title" "$obj_type")"
-  obj_token="$(printf '%s\n' "$created" | _lw_node_field obj_token)"
-  if [[ -z "$obj_token" ]]; then
-    printf '创建标准节点后缺少 obj_token: %s\n' "$title" >&2
-    return 1
-  fi
-  _lw_wiki_write_standard_content "$kind" "$title" "$obj_token" "$root_title" "$obj_type"
-  printf '%s\n' "$created" | jq -c --arg status "created" '(.data.node // .node // .) + {status: $status}'
+  _lw_wiki_ensure_standard_child_resolved "$space_id" "$parent_node" "$title" "$kind" "$root_title" "$existing" 1
+}
+
+_lw_wiki_ensure_standard_child_quiet() {
+  _lw_wiki_ensure_standard_child "$@" >/dev/null
+}
+
+_lw_wiki_ensure_standard_children_quiet() {
+  local space_id="$1"
+  local parent_node="$2"
+  local kind="$3"
+  local root_title="$4"
+  shift 4
+  local title children_json
+  children_json="$(lw_wiki_list_children "$space_id" "$parent_node" 50)" || return $?
+  for title in "$@"; do
+    _lw_wiki_ensure_standard_child_with_children "$space_id" "$parent_node" "$children_json" "$title" "$kind" "$root_title" 1 >/dev/null
+  done
+}
+
+_lw_wiki_ensure_standard_children_groups_parallel() {
+  local commands=() group
+  for group in "$@"; do
+    commands+=("$group")
+  done
+  _lw_run_parallel "$LW_BOOTSTRAP_PARALLELISM" "${commands[@]}"
 }
 
 lw_wiki_bootstrap_root() {
@@ -2451,7 +2616,9 @@ lw_wiki_bootstrap_root() {
   local target="${1:-}"
   local root_title="${2:-}"
   local resolved code space_id root_node obj_type node_type root_url
-  local child_json raw_json raw_node wiki_json wiki_node title kind
+  local root_children_json child_json child_spec title kind content_cmd
+  local raw_json raw_node wiki_json wiki_node
+  local content_commands=()
   if [[ -z "$target" ]]; then
     printf '用法: lw_wiki_bootstrap_root WIKI_ROOT_NODE_URL_OR_TOKEN [ROOT_TITLE]\n' >&2
     return 2
@@ -2482,33 +2649,40 @@ lw_wiki_bootstrap_root() {
     printf 'LLM Wiki 根节点必须是 origin 节点，当前 node_type=%s\n' "$node_type" >&2
     return 2
   }
-  _lw_wiki_assert_clean_bootstrap_root "$space_id" "$root_node"
+  if ! root_children_json="$(lw_wiki_list_children "$space_id" "$root_node" 50)"; then
+    printf '无法检查根节点子节点，已停止 bootstrap: %s\n' "$root_node" >&2
+    return 1
+  fi
+  _lw_wiki_assert_clean_bootstrap_root "$space_id" "$root_node" "$root_children_json"
 
-  for child_json in "AGENTS.md:agents" "INDEX:index" "LOG:log" "SOURCES:sources"; do
-    title="${child_json%%:*}"
-    kind="${child_json##*:}"
-    _lw_wiki_ensure_standard_child "$space_id" "$root_node" "$title" "$kind" "$root_title" >/dev/null
+  for child_spec in "AGENTS.md:agents" "INDEX:index" "LOG:log" "SOURCES:sources"; do
+    title="${child_spec%%:*}"
+    kind="${child_spec##*:}"
+    child_json="$(_lw_wiki_ensure_standard_child_with_children "$space_id" "$root_node" "$root_children_json" "$title" "$kind" "$root_title" 0)"
+    content_cmd="$(_lw_wiki_bootstrap_content_command "$kind" "$title" "$root_title" "$child_json")"
+    [[ -z "$content_cmd" ]] || content_commands+=("$content_cmd")
   done
 
-  raw_json="$(_lw_wiki_ensure_standard_child "$space_id" "$root_node" "raw" raw-root "$root_title")"
+  raw_json="$(_lw_wiki_ensure_standard_child_with_children "$space_id" "$root_node" "$root_children_json" "raw" raw-root "$root_title" 0)"
   raw_node="$(printf '%s\n' "$raw_json" | jq -r '.node_token // empty')"
   [[ -n "$raw_node" ]] || {
     printf '无法解析 raw 节点\n' >&2
     return 1
   }
-  for title in "${LW_RAW_CATEGORIES[@]}"; do
-    _lw_wiki_ensure_standard_child "$space_id" "$raw_node" "$title" raw-cat "$root_title" >/dev/null
-  done
+  content_cmd="$(_lw_wiki_bootstrap_content_command raw-root raw "$root_title" "$raw_json")"
+  [[ -z "$content_cmd" ]] || content_commands+=("$content_cmd")
 
-  wiki_json="$(_lw_wiki_ensure_standard_child "$space_id" "$root_node" "wiki" wiki-root "$root_title")"
+  wiki_json="$(_lw_wiki_ensure_standard_child_with_children "$space_id" "$root_node" "$root_children_json" "wiki" wiki-root "$root_title" 0)"
   wiki_node="$(printf '%s\n' "$wiki_json" | jq -r '.node_token // empty')"
   [[ -n "$wiki_node" ]] || {
     printf '无法解析 wiki 节点\n' >&2
     return 1
   }
-  for title in "${LW_WIKI_CATEGORIES[@]}"; do
-    _lw_wiki_ensure_standard_child "$space_id" "$wiki_node" "$title" wiki-cat "$root_title" >/dev/null
-  done
+  content_cmd="$(_lw_wiki_bootstrap_content_command wiki-root wiki "$root_title" "$wiki_json")"
+  [[ -z "$content_cmd" ]] || content_commands+=("$content_cmd")
+  content_commands+=("$(_lw_shell_join _lw_wiki_ensure_standard_children_quiet "$space_id" "$raw_node" raw-cat "$root_title" "${LW_RAW_CATEGORIES[@]}")")
+  content_commands+=("$(_lw_shell_join _lw_wiki_ensure_standard_children_quiet "$space_id" "$wiki_node" wiki-cat "$root_title" "${LW_WIKI_CATEGORIES[@]}")")
+  _lw_wiki_ensure_standard_children_groups_parallel "${content_commands[@]}"
 
   root_url="$(printf 'https://bytedance.larkoffice.com/wiki/%s' "$root_node")"
   _lw_wiki_registry_record_parts "$root_url" "$root_title" "$space_id" "$root_node" "$target" || true
@@ -2518,111 +2692,6 @@ lw_wiki_bootstrap_root() {
     --arg space_id "$space_id" \
     --arg root_node "$root_node" \
     '{ok: true, action: "bootstrap_root", root_url: $root_url, root_title: $root_title, space_id: $space_id, root_node: $root_node}'
-}
-
-lw_wiki_init_tree() {
-  _lw_need jq
-  local space_id="$1"
-  local root_title="$2"
-  local parent_node_token="${3:-}"
-  local root_json root_node root_obj
-  local agents_json agents_obj index_json index_obj log_json log_obj sources_json sources_obj
-  local raw_json raw_node raw_obj wiki_json wiki_node wiki_obj
-  local child_json child_obj title
-  _lw_require_parent_node "$parent_node_token" "初始化 LLM Wiki 子树" || return $?
-  root_json="$(lw_wiki_create_node "$space_id" "$parent_node_token" "$root_title")"
-  root_node="$(printf '%s\n' "$root_json" | _lw_node_field node_token)"
-  root_obj="$(printf '%s\n' "$root_json" | _lw_node_field obj_token)"
-  _lw_wiki_registry_record_parts "https://bytedance.larkoffice.com/wiki/$root_node" "$root_title" "$space_id" "$root_node" "init" || true
-  _lw_wiki_emit_created root "$root_title" "$root_json"
-  lw_write "$root_obj" - >/dev/null <<EOF
-# $root_title
-
-这是 Lark LLM Wiki 的根节点。来源材料和编译页面都以子 Wiki 节点组织，不能用单个文档中的链接替代。
-
-- AGENTS.md
-- INDEX
-- LOG
-- SOURCES
-- raw/docs
-- raw/articles
-- raw/repos
-- raw/meetings
-- raw/assets
-- raw/extracts
-- raw/manifests
-- wiki/sources
-- wiki/entities
-- wiki/concepts
-- wiki/comparisons
-- wiki/overviews
-- wiki/decisions
-- wiki/syntheses
-- wiki/disputed
-- wiki/audits
-EOF
-
-  agents_json="$(lw_wiki_create_node "$space_id" "$root_node" "AGENTS.md")"
-  agents_obj="$(printf '%s\n' "$agents_json" | _lw_node_field obj_token)"
-  _lw_wiki_emit_created contract "AGENTS.md" "$agents_json"
-  _lw_render_template AGENTS.md "$root_title" | lw_write "$agents_obj" - >/dev/null
-
-  index_json="$(lw_wiki_create_node_typed "$space_id" "$root_node" "INDEX" sheet)"
-  index_obj="$(printf '%s\n' "$index_json" | _lw_node_field obj_token)"
-  _lw_wiki_emit_created index "INDEX" "$index_json"
-  _lw_sheet_init_index "$index_obj"
-
-  log_json="$(lw_wiki_create_node "$space_id" "$root_node" "LOG")"
-  log_obj="$(printf '%s\n' "$log_json" | _lw_node_field obj_token)"
-  _lw_wiki_emit_created log "LOG" "$log_json"
-  _lw_render_template LOG.md "$root_title" | lw_write "$log_obj" - >/dev/null
-
-  sources_json="$(lw_wiki_create_node_typed "$space_id" "$root_node" "SOURCES" sheet)"
-  sources_obj="$(printf '%s\n' "$sources_json" | _lw_node_field obj_token)"
-  _lw_wiki_emit_created manifest "SOURCES" "$sources_json"
-  _lw_sheet_init_sources "$sources_obj"
-
-  raw_json="$(lw_wiki_create_node "$space_id" "$root_node" "raw")"
-  raw_node="$(printf '%s\n' "$raw_json" | _lw_node_field node_token)"
-  raw_obj="$(printf '%s\n' "$raw_json" | _lw_node_field obj_token)"
-  _lw_wiki_emit_created directory "raw" "$raw_json"
-  lw_write "$raw_obj" - >/dev/null <<'EOF'
-# raw
-
-来源材料放在这个节点下面。已有 Lark 文档或 Wiki 页面优先用 Wiki 快捷方式挂载；本地文件原件必须先上传，再把抽取文本放入 raw/extracts。
-EOF
-
-  for title in "${LW_RAW_CATEGORIES[@]}"; do
-    child_json="$(lw_wiki_create_node "$space_id" "$raw_node" "$title")"
-    child_obj="$(printf '%s\n' "$child_json" | _lw_node_field obj_token)"
-    _lw_wiki_emit_created directory "raw/$title" "$child_json"
-    lw_write "$child_obj" - >/dev/null <<EOF
-# raw/$title
-
-这里存放 raw/$title 类型的来源、快捷方式或抽取产物。source_refs: []
-EOF
-  done
-
-  wiki_json="$(lw_wiki_create_node "$space_id" "$root_node" "wiki")"
-  wiki_node="$(printf '%s\n' "$wiki_json" | _lw_node_field node_token)"
-  wiki_obj="$(printf '%s\n' "$wiki_json" | _lw_node_field obj_token)"
-  _lw_wiki_emit_created directory "wiki" "$wiki_json"
-  lw_write "$wiki_obj" - >/dev/null <<'EOF'
-# wiki
-
-编译后的、有 source_refs 支撑的知识放在这个节点下面。
-EOF
-
-  for title in "${LW_WIKI_CATEGORIES[@]}"; do
-    child_json="$(lw_wiki_create_node "$space_id" "$wiki_node" "$title")"
-    child_obj="$(printf '%s\n' "$child_json" | _lw_node_field obj_token)"
-    _lw_wiki_emit_created directory "wiki/$title" "$child_json"
-    lw_write "$child_obj" - >/dev/null <<EOF
-# wiki/$title
-
-编译后的 wiki/$title 页面放在这里。所有事实必须有 source_refs。
-EOF
-  done
 }
 
 lw_create() {
@@ -2737,7 +2806,6 @@ lw_usage() {
   lw_wiki_import_doc_shortcut LLM_WIKI_ROOT_URL WIKI_OR_DOC_URL [raw-category] [TITLE]   # 兼容别名：stage
   lw_wiki_import_local_file LLM_WIKI_ROOT_URL LOCAL_FILE [raw-category] [TITLE]          # 兼容别名：stage
   lw_wiki_move_doc_to_wiki SPACE_ID PARENT_NODE_TOKEN OBJ_TOKEN [OBJ_TYPE] [APPLY]
-  lw_wiki_init_tree SPACE_ID ROOT_TITLE PARENT_NODE_TOKEN
   lw_wiki_bootstrap_root WIKI_ROOT_NODE_URL_OR_TOKEN [ROOT_TITLE]
   lw_upload_file LOCAL_FILE [DRIVE_FOLDER_TOKEN] [UPLOAD_NAME]
   lw_extract_local LOCAL_FILE [OUTPUT.md|-]
@@ -2755,6 +2823,7 @@ lw_usage() {
 环境变量:
   LARK_WIKI_AS=user|bot   传给 lark-cli 的身份，默认 user。
   LARK_WIKI_DRY_RUN=1     打印原始 API 请求，不执行支持 dry-run 的 Wiki API 写入。
+  LARK_WIKI_BOOTSTRAP_PARALLELISM=4  bootstrap 中独立写入的最大并发数。
   LARK_LLM_WIKI_HOME=~/.lark-llm-wiki  最近访问知识库 registry 目录。
   LLM_WIKI_PYTHON=/path/python3  指定本地文件解析使用的 Python。
   LLM_WIKI_UPLOAD_FOLDER_TOKEN=token  本地文件上传到指定 Lark Drive 文件夹。
@@ -2811,7 +2880,6 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     wiki-import-doc-shortcut) lw_wiki_import_doc_shortcut "$@" ;;
     wiki-import-local-file) lw_wiki_import_local_file "$@" ;;
     wiki-move-doc-to-wiki) lw_wiki_move_doc_to_wiki "$@" ;;
-    wiki-init-tree) lw_wiki_init_tree "$@" ;;
     upload-file) lw_upload_file "$@" ;;
     extract-local) lw_extract_local "$@" ;;
     prepare-local-source) lw_prepare_local_source "$@" ;;

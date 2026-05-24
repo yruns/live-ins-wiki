@@ -62,7 +62,7 @@ class StaticContractTest(unittest.TestCase):
 
     def test_scripts_and_yaml_are_parseable(self) -> None:
         subprocess.run(["bash", "-n", "scripts/lark_wiki.sh"], cwd=ROOT, check=True)
-        subprocess.run(["bash", "-n", "scripts/init_lark_wiki_tree.sh"], cwd=ROOT, check=True)
+        subprocess.run(["bash", "-n", "scripts/wiki_structure_lint.sh"], cwd=ROOT, check=True)
         subprocess.run(
             ["python3", "-m", "py_compile", "scripts/extract_local_file.py"],
             cwd=ROOT,
@@ -650,8 +650,6 @@ class StaticContractTest(unittest.TestCase):
             "SKILL.md": read("SKILL.md"),
             "references/schema.md": read("references/schema.md"),
             "references/workflows.md": read("references/workflows.md"),
-            "scripts/init_lark_wiki_tree.sh": read("scripts/init_lark_wiki_tree.sh"),
-            "scripts/lark_wiki.sh": read("scripts/lark_wiki.sh"),
         }
         for name, text in texts.items():
             with self.subTest(file=name):
@@ -780,29 +778,31 @@ class StaticContractTest(unittest.TestCase):
         self.assertIn('--arg last_updated "$(_lw_now)"', script)
         self.assertIn('--last-updated "$(_lw_now)"', script)
 
-    def test_init_dry_run_plans_full_tree(self) -> None:
-        init = read("scripts/init_lark_wiki_tree.sh")
-        for item in [
-            '"/SOURCES [sheet]"',
-            '"/raw/extracts"',
-            '"/raw/manifests"',
-            '"/wiki/syntheses"',
-            '"/wiki/disputed"',
-            '"/wiki/audits"',
-        ]:
-            with self.subTest(item=item):
-                self.assertIn(item, init)
-
-    def test_init_creates_index_and_sources_as_sheets(self) -> None:
+    def test_initialization_uses_only_bootstrap_path(self) -> None:
         script = read("scripts/lark_wiki.sh")
-        init = read("scripts/init_lark_wiki_tree.sh")
+        skill = read("SKILL.md")
+        workflows = read("references/workflows.md")
+        readme = read("README.md")
+        combined = "\n".join([skill, workflows, readme])
         self.assertIn("_lw_sheet_init_index", script)
         self.assertIn("_lw_sheet_init_sources", script)
         self.assertIn("_lw_wiki_standard_child_obj_type", script)
-        self.assertRegex(script, r'lw_wiki_create_node_typed "\$space_id" "\$root_node" "INDEX" sheet')
-        self.assertRegex(script, r'lw_wiki_create_node_typed "\$space_id" "\$root_node" "SOURCES" sheet')
-        self.assertIn("INDEX [sheet]", init)
-        self.assertIn("SOURCES [sheet]", init)
+        self.assertIn("wiki-bootstrap-root", combined)
+        self.assertIn("初始化只有一个操作路径", combined)
+        self.assertFalse((ROOT / "scripts" / "init_lark_wiki_tree.sh").exists())
+        self.assertNotIn("init_lark_wiki_tree", combined)
+        self.assertNotIn("wiki-init-tree", script)
+        self.assertNotIn("lw_wiki_init_tree", script)
+        self.assertNotIn("LARK_WIKI_ALLOW_NESTED_INIT", combined)
+
+    def test_initialization_docs_forbid_implicit_health(self) -> None:
+        skill = read("SKILL.md")
+        workflows = read("references/workflows.md")
+        agents = read("references/templates/AGENTS.md")
+        combined = "\n".join([skill, workflows, agents])
+        self.assertIn("初始化后不要运行 `wiki-health`", combined)
+        self.assertIn("只有用户明确提出 health", combined)
+        self.assertIn("轻量 `wiki-structure-lint`", combined)
 
     def test_sheet_batch_update_fails_on_nonzero_business_code(self) -> None:
         command = r'''
@@ -821,6 +821,63 @@ _lw_sheet_batch_update fake_token '[{"addSheet":{"properties":{"title":"Concepts
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("sheets_batch_update failed", result.stderr)
 
+    def test_sheet_ensure_tabs_adds_missing_tabs_when_first_sheet_already_named(self) -> None:
+        command = r'''
+source scripts/lark_wiki.sh
+lark-cli() {
+  printf '{"data":{"sheets":[{"title":"Sources","sheet_id":"s1"}]}}\n'
+}
+_lw_sheet_batch_update() {
+  printf '%s\n' "$2" >&2
+}
+_lw_sheet_ensure_tabs fake_token '["Sources","Concepts","Entities"]'
+'''
+        result = subprocess.run(
+            ["bash", "-lc", command],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        self.assertIn('"title":"Concepts"', result.stderr)
+        self.assertIn('"title":"Entities"', result.stderr)
+
+    def test_parallel_runner_starts_batch_and_propagates_failure(self) -> None:
+        command = r'''
+source scripts/lark_wiki.sh
+tmp="$(mktemp -d)"
+_lw_run_parallel 3 \
+  "printf a > \"$tmp/a\"" \
+  "false" \
+  "printf b > \"$tmp/b\""
+status=$?
+cat "$tmp/a" "$tmp/b" 2>/dev/null || true
+rm -rf "$tmp"
+exit "$status"
+'''
+        result = subprocess.run(
+            ["bash", "-lc", command],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "ab")
+
+    def test_bootstrap_uses_capped_parallelism_for_independent_work(self) -> None:
+        script = read("scripts/lark_wiki.sh")
+        self.assertIn("LW_BOOTSTRAP_PARALLELISM", script)
+        self.assertIn("_lw_run_parallel", script)
+        self.assertIn("_lw_wiki_ensure_standard_children_groups_parallel", script)
+        self.assertIn("_lw_sheet_write_headers_parallel", script)
+        self.assertIn('"${LW_RAW_CATEGORIES[@]}"', script)
+        self.assertIn('"${LW_WIKI_CATEGORIES[@]}"', script)
+        self.assertIn('for child_spec in "AGENTS.md:agents" "INDEX:index" "LOG:log" "SOURCES:sources"', script)
+        self.assertIn("_lw_wiki_find_child_in_children", script)
+        self.assertIn("_lw_wiki_bootstrap_content_command", script)
+        self.assertIn('root_children_json="$(lw_wiki_list_children "$space_id" "$root_node" 50)"', script)
+        self.assertNotIn('_lw_wiki_ensure_standard_child_specs_parallel "$space_id" "$root_node"', script)
+
     def test_bootstrap_repairs_existing_standard_sheets(self) -> None:
         script = read("scripts/lark_wiki.sh")
         self.assertIn("_lw_wiki_repair_existing_standard_sheet", script)
@@ -836,10 +893,10 @@ _lw_sheet_batch_update fake_token '[{"addSheet":{"properties":{"title":"Concepts
         self.assertIn('无法检查根节点子节点', script)
         self.assertIn('if (( page_size > 50 )); then', script)
         self.assertIn('page_size=50', script)
-        self.assertIn('if ! children_json="$(lw_wiki_list_children "$space_id" "$root_node" 50)"; then', script)
+        self.assertIn('root_children_json="$(lw_wiki_list_children "$space_id" "$root_node" 50)"', script)
+        self.assertIn('_lw_wiki_assert_clean_bootstrap_root "$space_id" "$root_node" "$root_children_json"', script)
         self.assertIn('response_attempt <= 3', script)
         self.assertIn('sleep 1', script)
-        self.assertIn('_lw_wiki_assert_clean_bootstrap_root "$space_id" "$root_node"', script)
         self.assertIn("非标准子节点", workflows)
         self.assertIn("询问用户是否删除或移动", workflows)
         self.assertIn("不要默认运行完整 `wiki-health`", workflows)

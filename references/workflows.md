@@ -4,8 +4,10 @@
 
 ## Init
 
+初始化只有一个操作路径：把用户指定的 Wiki 文档节点作为 LLM Wiki 根节点，运行 `wiki-bootstrap-root`。不要额外创建 `LLM Wiki` 子入口。
+
 1. 确认用户指定的是已有大知识库里的 `/wiki/` 文档节点，不是普通 docx URL。
-2. 运行 `scripts/init_lark_wiki_tree.sh WIKI_DOC_NODE_URL ROOT_TITLE`。
+2. 运行 `scripts/lark_wiki.sh wiki-bootstrap-root WIKI_ROOT_NODE_URL_OR_TOKEN [ROOT_TITLE]`。
 3. 初始化必须创建：
    - `AGENTS.md`
    - `INDEX`（新建/重建必须是 Feishu spreadsheet；每类目录一个 sheet；doc 表格仅作旧 Wiki fallback）
@@ -29,6 +31,7 @@
    - `wiki/audits`
 4. 不在知识空间根部创建入口，不创建独立知识空间。
 5. 初始化后把项目入口 URL、space_id 和 root node token 写入 `~/.lark-llm-wiki/registry.json`，并交还给用户。
+6. 初始化后不要运行 `wiki-health`。默认只允许脚本成功返回和轻量 `wiki-structure-lint` 作为验证；只有用户明确提出 health / 完整健康检查时才运行 `wiki-health`。
 
 ## Bootstrap Existing Root
 
@@ -38,7 +41,7 @@
 scripts/lark_wiki.sh wiki-bootstrap-root WIKI_ROOT_NODE_URL_OR_TOKEN [ROOT_TITLE]
 ```
 
-Bootstrap 前必须先检查根节点是否干净。不要默认运行完整 `wiki-health`；它会读取更多 Lark 节点和页面正文，只在用户明确要求或排查复杂结构问题时使用：
+Bootstrap 前必须先检查根节点是否干净。初始化后不要运行 `wiki-health`；不要默认运行完整 `wiki-health`；它会读取更多 Lark 节点和页面正文，只在用户明确要求或排查复杂结构问题时使用。默认验证只跑轻量 `wiki-structure-lint`：
 
 - 如果根节点没有子节点，可以直接运行 `wiki-bootstrap-root`。
 - 如果根节点只有 `AGENTS.md`、`INDEX`、`LOG`、`SOURCES`、`raw`、`wiki` 这些标准子节点，视为已有或部分初始化的 LLM Wiki，可以继续幂等补齐。
@@ -50,7 +53,7 @@ Bootstrap 只在当前根节点下补齐缺失的标准子节点，不覆盖已�
 - `raw/docs`、`raw/articles`、`raw/repos`、`raw/meetings`、`raw/assets`、`raw/extracts`、`raw/manifests`
 - `wiki/sources`、`wiki/entities`、`wiki/concepts`、`wiki/comparisons`、`wiki/overviews`、`wiki/decisions`、`wiki/syntheses`、`wiki/disputed`、`wiki/audits`
 
-只有当用户要在某个父节点下面新建独立 LLM Wiki 入口时，才使用 Init 流程。
+只有用户明确提出 health、完整健康检查或排查复杂结构问题时，才可以运行完整 `wiki-health`。
 
 ## Recent Wiki Registry
 
