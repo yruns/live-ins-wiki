@@ -50,6 +50,7 @@ metadata:
 - 新增文档、创建页面、导入来源、移动文档或创建快捷方式前，目标 Wiki 必须来自用户本轮明确指定、registry current、或 registry 中唯一匹配的名称。
 - 不能随意创建独立知识库空间。新建 LLM Wiki 必须挂在用户确认的已有大知识库文档节点下面，以文件 / 子文件形式展开。
 - 如果用户明确把一个已有 Wiki 文档节点指定为知识库根节点，且该节点尚未包含标准结构，用 `wiki-bootstrap-root` 在当前节点下补齐结构；不要再额外创建 `LLM Wiki` 子入口。
+- 对用户指定的已有根节点，bootstrap 前必须检查根层级是否干净；若存在 `AGENTS.md`、`INDEX`、`LOG`、`SOURCES`、`raw`、`wiki` 之外的子节点，先停下来询问用户是否删除或移动，不能直接混入 LLM Wiki 标准结构。
 - 不能用一个 Lark 文档加链接冒充 Wiki；唯一合法结构是真实 Lark Wiki node tree。
 - `/wiki/` token 必须先解析，不能直接当 doc token 用。
 - Lark doc/wiki 来源默认创建快捷方式到 `raw/...`；移动原文档进 Wiki 需要用户明确批准。

@@ -432,7 +432,10 @@ lw_wiki_list_children() {
   local space_id="$1"
   local parent_node_token="${2:-}"
   local page_size="${3:-50}"
-  local page_token="" params response items all_items has_more next_token code msg
+  local page_token="" params response items all_items has_more next_token code msg response_attempt
+  if (( page_size > 50 )); then
+    page_size=50
+  fi
   all_items='[]'
   code="0"
   msg=""
@@ -445,7 +448,18 @@ lw_wiki_list_children() {
       + (if $parent_node_token == "" or $parent_node_token == "-" then {} else {parent_node_token: $parent_node_token} end)
       + (if $page_token == "" then {} else {page_token: $page_token} end)
     ')"
-    response="$(_lw_api GET "/open-apis/wiki/v2/spaces/$space_id/nodes" --params "$params")"
+    response=""
+    for ((response_attempt = 1; response_attempt <= 3; response_attempt++)); do
+      if response="$(_lw_api GET "/open-apis/wiki/v2/spaces/$space_id/nodes" --params "$params")" &&
+        [[ -n "$response" ]]; then
+        break
+      fi
+      sleep 1
+    done
+    if [[ -z "$response" ]]; then
+      printf 'Lark API 返回空响应，无法列出 Wiki 子节点: space_id=%s parent_node_token=%s\n' "$space_id" "$parent_node_token" >&2
+      return 1
+    fi
     code="$(printf '%s\n' "$response" | jq -r '.code // 0')"
     msg="$(printf '%s\n' "$response" | jq -r '.msg // .message // ""')"
     if [[ "$code" != "0" ]]; then
@@ -2338,6 +2352,46 @@ _lw_wiki_standard_child_obj_type() {
   esac
 }
 
+_lw_wiki_repair_existing_standard_sheet() {
+  local kind="$1"
+  local title="$2"
+  local obj_token="$3"
+  local root_title="$4"
+  local obj_type="$5"
+  if [[ "$obj_type" != "sheet" ]]; then
+    return 0
+  fi
+  case "$kind" in
+    index|sources)
+      # Bootstrap can resume after a partial sheet initialization interrupted an earlier run.
+      _lw_wiki_write_standard_content "$kind" "$title" "$obj_token" "$root_title" "$obj_type"
+      ;;
+  esac
+}
+
+_lw_wiki_assert_clean_bootstrap_root() {
+  _lw_need jq
+  local space_id="$1"
+  local root_node="$2"
+  local children_json dirty
+  if ! children_json="$(lw_wiki_list_children "$space_id" "$root_node" 50)"; then
+    printf '无法检查根节点子节点，已停止 bootstrap: %s\n' "$root_node" >&2
+    return 1
+  fi
+  dirty="$(printf '%s\n' "$children_json" | jq -r '
+    ["AGENTS.md", "INDEX", "LOG", "SOURCES", "raw", "wiki"] as $allowed
+    | (.data.items // [])
+    | map((.title // "") as $title | select(($allowed | index($title)) == null))
+    | .[]
+    | "- " + (.title // "(untitled)") + " [" + (.obj_type // "unknown") + "] " + (.node_token // "")
+  ')"
+  if [[ -n "$dirty" ]]; then
+    printf 'LLM Wiki 根节点不是干净目录，发现非标准子节点:\n%s\n' "$dirty" >&2
+    printf '请先询问用户是否删除或移动这些文档；确认根节点清空后再重新运行 bootstrap。\n' >&2
+    return 2
+  fi
+}
+
 _lw_wiki_ensure_standard_child() {
   local space_id="$1"
   local parent_node="$2"
@@ -2347,6 +2401,9 @@ _lw_wiki_ensure_standard_child() {
   local existing created obj_token obj_type
   existing="$(lw_wiki_find_child "$space_id" "$parent_node" "$title")"
   if [[ -n "$existing" ]]; then
+    obj_token="$(printf '%s\n' "$existing" | jq -r '.obj_token // empty')"
+    obj_type="$(printf '%s\n' "$existing" | jq -r '.obj_type // empty')"
+    _lw_wiki_repair_existing_standard_sheet "$kind" "$title" "$obj_token" "$root_title" "$obj_type"
     printf '%s\n' "$existing" | jq -c --arg status "existing" '. + {status: $status}'
     return 0
   fi
@@ -2397,6 +2454,7 @@ lw_wiki_bootstrap_root() {
     printf 'LLM Wiki 根节点必须是 origin 节点，当前 node_type=%s\n' "$node_type" >&2
     return 2
   }
+  _lw_wiki_assert_clean_bootstrap_root "$space_id" "$root_node"
 
   for child_json in "AGENTS.md:agents" "INDEX:index" "LOG:log" "SOURCES:sources"; do
     title="${child_json%%:*}"

@@ -38,6 +38,12 @@
 scripts/lark_wiki.sh wiki-bootstrap-root WIKI_ROOT_NODE_URL_OR_TOKEN [ROOT_TITLE]
 ```
 
+Bootstrap 前必须先检查根节点是否干净：
+
+- 如果根节点没有子节点，可以直接运行 `wiki-bootstrap-root`。
+- 如果根节点只有 `AGENTS.md`、`INDEX`、`LOG`、`SOURCES`、`raw`、`wiki` 这些标准子节点，视为已有或部分初始化的 LLM Wiki，可以继续幂等补齐。
+- 如果发现任何非标准子节点，停止初始化，列出这些文档，并询问用户是否删除或移动。LLM Wiki 只能建立在干净根节点上，不能把既有业务文档和标准结构混在同一个根层级。
+
 Bootstrap 只在当前根节点下补齐缺失的标准子节点，不覆盖已有子节点正文，也不移动来源文档。它必须创建或确认：
 
 - `AGENTS.md`、`INDEX`、`LOG`、`SOURCES`

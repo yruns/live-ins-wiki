@@ -804,6 +804,28 @@ class StaticContractTest(unittest.TestCase):
         self.assertIn("INDEX [sheet]", init)
         self.assertIn("SOURCES [sheet]", init)
 
+    def test_bootstrap_repairs_existing_standard_sheets(self) -> None:
+        script = read("scripts/lark_wiki.sh")
+        self.assertIn("_lw_wiki_repair_existing_standard_sheet", script)
+        self.assertIn('kind" "$title" "$obj_token" "$root_title" "$obj_type"', script)
+        self.assertIn("Bootstrap can resume after a partial sheet initialization", script)
+
+    def test_bootstrap_requires_clean_root_before_creation(self) -> None:
+        script = read("scripts/lark_wiki.sh")
+        workflows = read("references/workflows.md")
+        self.assertIn("_lw_wiki_assert_clean_bootstrap_root", script)
+        self.assertIn('LLM Wiki 根节点不是干净目录', script)
+        self.assertIn('请先询问用户是否删除或移动这些文档', script)
+        self.assertIn('无法检查根节点子节点', script)
+        self.assertIn('if (( page_size > 50 )); then', script)
+        self.assertIn('page_size=50', script)
+        self.assertIn('if ! children_json="$(lw_wiki_list_children "$space_id" "$root_node" 50)"; then', script)
+        self.assertIn('response_attempt <= 3', script)
+        self.assertIn('sleep 1', script)
+        self.assertIn('_lw_wiki_assert_clean_bootstrap_root "$space_id" "$root_node"', script)
+        self.assertIn("非标准子节点", workflows)
+        self.assertIn("询问用户是否删除或移动", workflows)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

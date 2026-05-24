@@ -35,6 +35,7 @@ This Wiki is a Lark/Feishu implementation of a Karpathy-style LLM Wiki. It store
 - `INDEX` source rows are upserted by `Source ID`, not appended as duplicates.
 - Before asking the user for a target Wiki, inspect `~/.lark-llm-wiki/registry.json` or run `lw_wiki_registry_current`.
 - A registry `current` Wiki or uniquely matched registry name is an explicit enough target; ambiguous or missing registry entries still require user confirmation.
+- Before bootstrapping a user-specified existing root, verify the root layer is clean. Non-standard children outside `AGENTS.md`, `INDEX`, `LOG`, `SOURCES`, `raw`, and `wiki` require asking the user whether to delete or move them first.
 - Destructive edits require a short write plan before execution.
 - Never write Lark access tokens, app secrets, cookies, auth headers, personal credentials, or debug secrets into Wiki pages, `SOURCES`, `INDEX`, or `LOG`.
 
