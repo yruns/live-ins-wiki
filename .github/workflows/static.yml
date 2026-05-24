@@ -1,0 +1,21 @@
+name: static
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Python tests
+        run: python3 -m unittest tests/test_static_contract.py
+      - name: Shell syntax
+        run: bash -n scripts/lark_wiki.sh scripts/init_lark_wiki_tree.sh
+      - name: Python syntax
+        run: python3 -m py_compile scripts/extract_local_file.py
+      - name: Shellcheck
+        run: shellcheck scripts/lark_wiki.sh scripts/init_lark_wiki_tree.sh

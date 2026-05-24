@@ -1,19 +1,24 @@
-# Lark LLM Wiki 结构
+# Lark LLM Wiki Schema
 
-初始化或维护 Lark 版 LLM Wiki 时使用这个结构。它必须是真实的 Lark Wiki 节点树，不是单个文档里的标题层级，也不是随意新建的独立知识库空间。
+这个 schema 描述 Lark-native LLM Wiki 的默认目录、页面类型、元数据、引用和建页规则。目标 Wiki 初始化后，应把这些规则写入目标 Wiki 的 `AGENTS.md`，让它成为该 Wiki 的 runtime schema。
 
-## 核心目录
+## 节点树
+
+所有条目都是真实 Lark Wiki 节点：
 
 ```text
 AGENTS.md
 INDEX
 LOG
+SOURCES
 raw/
-  requirements/
-  meetings/
+  docs/
   articles/
   repos/
+  meetings/
   assets/
+  extracts/
+  manifests/
 wiki/
   sources/
   entities/
@@ -21,55 +26,148 @@ wiki/
   comparisons/
   overviews/
   decisions/
+  syntheses/
+  disputed/
+  audits/
 ```
 
-上面的每一项都是 Wiki 节点。整棵树必须挂在已有大知识库的某个用户确认父节点下面，以文件 / 子文件形式展开。`raw/` 和 `wiki/` 这类分类名是父节点，用来形成可见的目录树。
+不要把 requirements 作为默认 raw 子目录。产品或工程场景确实需要时，把它作为用户确认后的 domain extension，而不是默认 schema。
 
 ## 页面类型
 
-- `Source`：对一个 raw 文档或一组来源的编译摘要。
-- `Entity`：产品、服务、模块、人员、表、API 或系统的稳定页面。
-- `Concept`：规则、原则、模式、不变量或术语的稳定页面。
-- `Comparison`：值得保存的对比型查询结果。
-- `Overview`：综合三个及以上来源后值得保存的概览。
-- `Decision`：ADR 风格决策页，包含背景、决策、备选方案和影响。
+- `source`：单个来源的摘要、key claims、实体、概念、更新记录和 coverage audit。
+- `entity`：产品、服务、模块、人员、表、API、系统等稳定对象。
+- `concept`：术语、规则、原则、模式、不变量。
+- `comparison`：多对象或多方案对比。
+- `overview`：跨三个及以上来源的主题概览。
+- `decision`：ADR 风格决策和取舍记录。
+- `synthesis`：由 query 产生、可复用的多来源回答。
+- `disputed`：互相冲突或需要人工确认的 claims。
+- `audit`：source coverage、引用完整性、健康检查或 lint 结果。
 
-## 必需元数据块
+## YAML frontmatter
 
-每个生成的 wiki 页面顶部都放这个块：
+所有 `wiki/` 下的生成页都使用 YAML frontmatter，不使用 blockquote metadata。
 
 ```markdown
-> type: source | entity | concept | comparison | overview | decision
-> domain: <domain-or-cross>
-> source: <mention-doc or source URL/token>
-> last_compiled: YYYY-MM-DD
-> confidence: high | medium | low
-> review_state: draft | reviewed | locked
+---
+type: concept
+slug: concepts/<stable-slug>
+title: ""
+aliases: []
+status: draft              # staged | extracted | draft | compiled | reviewed | locked | deprecated
+review_state: unreviewed   # unreviewed | reviewed | needs-human-review
+last_compiled: "YYYY-MM-DDTHH:MM:SS+08:00"
+last_verified: null
+source_refs:
+  - source_id: SRC-YYYY-MM-DD-001
+    raw_node: ""
+    source_page: ""
+    claim_ids: []
+confidence: medium         # low | medium | high
+contradiction_state: none  # none | disputed | superseded
+related_pages: []
+---
 ```
 
-## 操作规则
+`source_refs` 必须是复数。概念页、实体页、综述页和决策页通常来自多个 source，不能只保留最后一个来源。
 
-- raw 页面是事实来源，导入和编译时不要覆盖 raw 内容。
-- 不随意创建独立知识库空间；新项目入口必须是已有大知识库节点下的子节点。
-- 已经是 Wiki 节点的来源页，应挂到 `raw/...` 下作为 Wiki 快捷方式。
-- 普通 `docx/doc` 文档如果还不是 Wiki 节点，也应优先通过 Wiki 节点创建接口挂成快捷方式；移动进 Wiki 需要用户明确批准。
-- 本地文件来源必须保留上传后的原始文件 token，并记录本地解析产物。编译页不能只引用本地路径。
-- wiki 页面是编译产物，保持精炼，并保留来源依据。
-- `INDEX` 是内容地图。新增或重命名页面时必须更新。
-- `LOG` 只能追加。记录日期、操作类型、页面和简短摘要。
-- 冲突是一等信息。把竞争性结论保留在 `Disputed` 小节，不要静默选择一边。
-- 高价值查询输出应作为 `Comparison`、`Overview`、`Concept` 或 `Decision` 页面提出写回建议。
+## Source ID
 
-## Lint 检查
+推荐格式：
 
-手动或定时运行检查。关注：
+```text
+SRC-YYYY-MM-DD-001
+```
 
-- 页面是否存在于 `INDEX`
-- `INDEX` 目标是否仍可读取
-- 生成页面是否有元数据
-- 是否保留来源链接
-- 是否存在孤儿 `Concept` / `Entity`
-- 是否存在重复概念
-- 来源修改时间是否过期，能获取时检查
-- 低置信度结论是否缺少 review
-- 是否有未解决的 `Disputed` 小节
+同一天重复导入时递增尾号。脚本可以生成候选 ID，最终以 `SOURCES` manifest 中的唯一记录为准。
+
+## SOURCES manifest
+
+`SOURCES` 是可解析的 source manifest，按表格维护：
+
+```markdown
+| source_id | title | kind | raw_node | origin | imported_at | checksum | extraction | source_page | compiled_into | compile_status | audit_status | review_state |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+```
+
+状态含义：
+
+- `staged`：来源已进入 `raw`，还没有可用抽取或 source page。
+- `extracted`：本地文件或复杂来源已抽取文本，仍未完成跨页编译。
+- `compiled`：关键 claims 已进入相关 `wiki/` 页。
+- `audited`：完成 coverage audit。
+- `deprecated`：来源不再作为当前事实依据，但不能删除历史记录。
+
+## 引用规则
+
+事实性段落必须有 `source_refs` 支撑。回答用户时优先引用 compiled page；如果 compiled page 缺少证据，再回退 raw。
+
+推荐 claim 表：
+
+```markdown
+## Atomic Claims
+
+| Claim ID | Claim | Source refs | Confidence | Notes |
+|---|---|---|---|---|
+| C1 | ... | SRC-2026-05-24-001 | high | Directly stated |
+```
+
+自然语言段落中的引用格式：
+
+```markdown
+[source: SRC-2026-05-24-001, claim: C1]
+[source: SRC-2026-05-24-002, raw: raw/docs/<title>]
+```
+
+如果某句话是 LLM 综合推断，标记为 inference，并列出支撑来源。
+
+## 命名、别名和合并
+
+- Metadata 中使用稳定 `slug`，建议 lower-kebab-case，例如 `concepts/agentic-coding`。
+- Lark 页面标题可以是中文或自然语言，但同一 slug 只能有一个 canonical page。
+- 每页维护 `aliases`。
+- 建页前先查 `INDEX`、`SOURCES` 和 aliases；存在近似页面时更新旧页，不重复创建。
+- 合并 reviewed / locked 页面前，先给出 merge plan 并征求用户确认。
+- 内部链接使用 Markdown 链接指向 Lark 节点 URL，同时保留 slug：
+  ```markdown
+  [Concept: Agentic Coding](https://.../wiki/...)
+  ```
+
+## 建页阈值
+
+`entity` 页只在满足任一条件时创建：
+
+- 它是至少两个来源的核心对象。
+- 它经常出现在用户问题里。
+- 它参与 comparison、decision 或 disputed claim。
+- 用户明确要求追踪。
+
+`concept` 页只在满足任一条件时创建：
+
+- 它出现在至少两个来源。
+- 它是解释 decision、comparison、overview 的必要概念。
+- 它是用户定义的领域基础术语。
+
+Passing mention 不建页，放在 source page 的 `Mentioned but not tracked`。
+
+## Disputed
+
+冲突是一等信息。不要静默覆盖旧结论。
+
+```markdown
+## Disputed Claims
+
+| Claim | Existing support | New conflicting support | Conflict type | Current resolution | Needs human review |
+|---|---|---|---|---|---|
+```
+
+冲突类型可用：`date mismatch`、`definition mismatch`、`metric mismatch`、`policy mismatch`、`factual contradiction`、`source reliability`。
+
+## 导出兼容
+
+虽然存储在 Lark Wiki 中，所有页面仍应尽量保持 Markdown export compatible：
+
+- YAML frontmatter 可被导出保留。
+- Lark node URL 是物理链接；slug 是逻辑链接。
+- `INDEX`、`LOG`、`SOURCES` 使用稳定 Markdown 表格或小节格式，便于脚本和 LLM 读取。

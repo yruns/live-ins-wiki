@@ -1,3 +1,17 @@
 display_name: Lark LLM Wiki
-short_description: 用真实 Lark Wiki 节点树构建和维护 LLM Wiki 知识库。
-default_prompt: 使用 Lark LLM Wiki skill 在用户确认的大知识库父节点下初始化、导入、查询、检查或维护 Lark Wiki 子树；Lark docs/wiki 建快捷方式，本地文件先上传原始文件再解析编译。
+short_description: 在真实 Lark Wiki 节点树中维护 Karpathy-style LLM Wiki。
+default_prompt: 使用 Lark LLM Wiki skill，在用户确认的已有大知识库父节点下初始化、stage、compile、query、health-check、lint 或 audit 一个 Lark-native LLM Wiki；不要把单个文档链接表当作 Wiki。
+
+interface:
+  display_name: Lark LLM Wiki
+  summary: Maintain a Karpathy-style LLM Wiki inside a real Lark/Feishu Wiki node tree.
+  description: >
+    Use when the user asks to initialize, import, stage, compile, query,
+    health-check, lint, audit, or maintain a source-grounded LLM Wiki stored
+    in Lark/Feishu. Do not use for generic note-taking, standalone Lark docs,
+    one-document link collections, or local Markdown-only vaults.
+dependencies:
+  tools:
+    - lark-cli
+    - jq
+    - python3
