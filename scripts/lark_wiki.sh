@@ -1529,7 +1529,7 @@ lw_wiki_health() {
           esac
           [[ -n "$obj_token" ]] || continue
           body="$(lw_cat "$obj_token" 2>/dev/null || true)"
-          if [[ -z "${body//[[:space:]]/}" ]]; then
+          if ! printf '%s\n' "$body" | grep -q '[^[:space:]]'; then
             if [[ "$category" == "audits" ]]; then
               printf 'WARN wiki/%s/%s empty or unreadable\n' "$category" "$title"
               warnings=$((warnings + 1))
