@@ -14,6 +14,8 @@ usage() {
 作用:
   输入一个已有大知识库中的文档节点，自动解析 space_id 和 node_token，
   然后在该节点下面创建 LLM Wiki 子树。
+  如果用户指定的节点本身就是 LLM Wiki 根节点，请改用:
+    scripts/lark_wiki.sh wiki-bootstrap-root WIKI_ROOT_NODE_URL_OR_TOKEN [ROOT_TITLE]
 
 要求:
   - 参数必须是 /wiki/ 节点 URL 或 wiki node_token，不能是普通 docx URL。

@@ -15,7 +15,11 @@ This is not a generic RAG system, not a local Obsidian vault, and not one Lark d
 
 ```bash
 scripts/lark_wiki.sh auth
+
+# Choose one initialization mode:
 scripts/init_lark_wiki_tree.sh "$CONFIRMED_PARENT_WIKI_DOC_NODE" "LLM Wiki"
+scripts/lark_wiki.sh wiki-bootstrap-root "$CONFIRMED_LLM_WIKI_ROOT_NODE"
+
 scripts/lark_wiki.sh wiki-stage-lark-doc "$LLM_WIKI_ROOT" "$SOURCE_DOC_OR_WIKI_URL" docs
 scripts/lark_wiki.sh wiki-compile-source-plan "$LLM_WIKI_ROOT" "SRC-YYYY-MM-DD-001"
 scripts/lark_wiki.sh wiki-query-plan "$LLM_WIKI_ROOT" "问题"
@@ -38,5 +42,5 @@ scripts/lark_wiki.sh wiki-registry-current
 ```bash
 python3 -m unittest tests/test_static_contract.py
 bash -n scripts/lark_wiki.sh scripts/init_lark_wiki_tree.sh
-python3 -m py_compile scripts/extract_local_file.py scripts/manifest_upsert.py scripts/source_id_next.py scripts/index_upsert.py scripts/wiki_registry.py scripts/manifest_find.py scripts/manifest_lint.py
+python3 -m py_compile scripts/extract_local_file.py scripts/manifest_upsert.py scripts/source_id_next.py scripts/index_upsert.py scripts/wiki_registry.py scripts/manifest_find.py scripts/manifest_lint.py scripts/lark_markdown.py
 ```

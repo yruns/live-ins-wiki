@@ -73,6 +73,7 @@ class StaticContractTest(unittest.TestCase):
                 "python3",
                 "-m",
                 "py_compile",
+                "scripts/lark_markdown.py",
                 "scripts/manifest_upsert.py",
                 "scripts/source_id_next.py",
                 "scripts/index_upsert.py",
@@ -289,6 +290,63 @@ class StaticContractTest(unittest.TestCase):
         self.assertIn("FAIL SOURCES compile_status=compiled but compiled_into is empty", result.stdout)
         self.assertIn("WARN SOURCES has staged/extracted rows", result.stdout)
 
+    def test_manifest_tools_accept_lark_table_export(self) -> None:
+        sample = """
+# SOURCES
+
+<lark-table rows="2" cols="14" header-row="true">
+  <lark-tr>
+    <lark-td>source_id</lark-td><lark-td>title</lark-td><lark-td>kind</lark-td><lark-td>raw_node</lark-td><lark-td>origin</lark-td><lark-td>imported_at</lark-td><lark-td>updated_at</lark-td><lark-td>checksum</lark-td><lark-td>extraction</lark-td><lark-td>source_page</lark-td><lark-td>compiled_into</lark-td><lark-td>compile_status</lark-td><lark-td>audit_status</lark-td><lark-td>review_state</lark-td>
+  </lark-tr>
+  <lark-tr>
+    <lark-td>SRC-2026-05-24-001</lark-td><lark-td>A | B</lark-td><lark-td>docx</lark-td><lark-td>raw/docs/A</lark-td><lark-td>https://example.test/a</lark-td><lark-td>t0</lark-td><lark-td>t0</lark-td><lark-td>-</lark-td><lark-td>-</lark-td><lark-td>-</lark-td><lark-td>-</lark-td><lark-td>staged</lark-td><lark-td>pending</lark-td><lark-td>unreviewed</lark-td>
+  </lark-tr>
+</lark-table>
+"""
+        found = subprocess.run(
+            ["python3", "scripts/manifest_find.py", "--origin", "https://example.test/a"],
+            cwd=ROOT,
+            input=sample,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        next_id = subprocess.run(
+            ["python3", "scripts/source_id_next.py", "--date", "2026-05-24"],
+            cwd=ROOT,
+            input=sample,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        updated = subprocess.run(
+            [
+                "python3",
+                "scripts/manifest_upsert.py",
+                "--source-id",
+                "SRC-2026-05-24-001",
+                "--title",
+                "A | B",
+                "--kind",
+                "docx",
+                "--raw-node",
+                "raw/docs/A",
+                "--origin",
+                "https://example.test/a",
+                "--updated-at",
+                "t1",
+            ],
+            cwd=ROOT,
+            input=sample,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        self.assertEqual(found.stdout.strip(), "SRC-2026-05-24-001")
+        self.assertEqual(next_id.stdout.strip(), "SRC-2026-05-24-002")
+        self.assertIn("A \\| B", updated.stdout)
+        self.assertIn("| raw/docs/A | https://example.test/a | t0 | t1 |", updated.stdout)
+
     def test_index_upsert_updates_sources_table_without_duplicate_rows(self) -> None:
         first = subprocess.run(
             [
@@ -352,6 +410,54 @@ class StaticContractTest(unittest.TestCase):
         self.assertIn("New \\| summary", second.stdout)
         self.assertIn("| raw/docs/A | SRC-1 | doc |", second.stdout)
 
+    def test_index_upsert_accepts_lark_table_export(self) -> None:
+        sample = """
+# INDEX
+
+## Sources
+
+<lark-table rows="2" cols="7" header-row="true">
+  <lark-tr>
+    <lark-td>Page</lark-td><lark-td>Source ID</lark-td><lark-td>Type</lark-td><lark-td>Summary</lark-td><lark-td>Compiled Into</lark-td><lark-td>Status</lark-td><lark-td>Last Updated</lark-td>
+  </lark-tr>
+  <lark-tr>
+    <lark-td>raw/docs/A</lark-td><lark-td>SRC-1</lark-td><lark-td>docx</lark-td><lark-td>Old | summary</lark-td><lark-td>-</lark-td><lark-td>staged</lark-td><lark-td>2026-05-24</lark-td>
+  </lark-tr>
+</lark-table>
+"""
+        result = subprocess.run(
+            [
+                "python3",
+                "scripts/index_upsert.py",
+                "--section",
+                "Sources",
+                "--key-column",
+                "Source ID",
+                "--page",
+                "raw/docs/A",
+                "--source-id",
+                "SRC-1",
+                "--type",
+                "docx",
+                "--summary",
+                "New | summary",
+                "--compiled-into",
+                "wiki/sources/A",
+                "--status",
+                "compiled_unverified",
+                "--last-updated",
+                "2026-05-25",
+            ],
+            cwd=ROOT,
+            input=sample,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        self.assertEqual(result.stdout.count("SRC-1"), 1)
+        self.assertIn("New \\| summary", result.stdout)
+        self.assertIn("| raw/docs/A | SRC-1 | docx |", result.stdout)
+
     def test_wiki_registry_records_recent_wikis_and_resolves_current(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             record = [
@@ -392,6 +498,40 @@ class StaticContractTest(unittest.TestCase):
             self.assertEqual(resolved.stdout.strip(), "rootA")
             self.assertEqual(len(data["wikis"]), 1)
             self.assertEqual(data["wikis"][0]["access_count"], 2)
+
+    def test_wiki_registry_parallel_records_do_not_share_tmp_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            procs = [
+                subprocess.Popen(
+                    [
+                        "python3",
+                        "scripts/wiki_registry.py",
+                        "--home",
+                        tmp,
+                        "record",
+                        "--root-url",
+                        f"https://bytedance.larkoffice.com/wiki/root{index}",
+                        "--name",
+                        f"wiki-{index}",
+                        "--space-id",
+                        "space-a",
+                        "--root-node",
+                        f"root{index}",
+                        "--now",
+                        f"2026-05-24T12:00:{index:02d}+0800",
+                    ],
+                    cwd=ROOT,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                for index in range(12)
+            ]
+            results = [proc.communicate(timeout=10) + (proc.returncode,) for proc in procs]
+            failures = [result for result in results if result[2] != 0]
+            self.assertEqual(failures, [])
+            data = json.loads((Path(tmp) / "registry.json").read_text(encoding="utf-8"))
+            self.assertGreaterEqual(len(data["wikis"]), 1)
 
     def test_skill_and_templates_have_parseable_frontmatter(self) -> None:
         skill = parse_frontmatter("SKILL.md")
@@ -481,6 +621,7 @@ class StaticContractTest(unittest.TestCase):
             "lw_wiki_read_pages",
             "lw_wiki_read_raw",
             "lw_wiki_health",
+            "lw_wiki_bootstrap_root",
             "lw_wiki_manifest_upsert",
             "lw_wiki_manifest_append",
             "lw_wiki_registry_list",

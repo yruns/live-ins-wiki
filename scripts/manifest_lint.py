@@ -7,7 +7,7 @@ import sys
 from collections import Counter
 from collections.abc import Iterable
 
-from manifest_upsert import is_manifest_header, is_separator, row_values, split_row
+from manifest_upsert import is_manifest_header, is_separator, normalize_lark_tables, row_values, split_row
 
 
 COMPLETE_AUDIT_STATUSES = {"audited", "complete", "completed"}
@@ -18,6 +18,7 @@ def meaningful(value: str | None) -> bool:
 
 
 def manifest_rows(text: str) -> tuple[bool, list[dict[str, str]]]:
+    text = normalize_lark_tables(text)
     lines = text.splitlines()
     header: list[str] | None = None
     start = 0

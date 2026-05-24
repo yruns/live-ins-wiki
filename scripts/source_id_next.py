@@ -8,6 +8,8 @@ import datetime as dt
 import re
 import sys
 
+from lark_markdown import normalize_lark_tables
+
 
 def split_row(line: str) -> list[str]:
     stripped = line.strip()
@@ -39,6 +41,7 @@ def split_row(line: str) -> list[str]:
 
 
 def next_source_id(text: str, today: str) -> str:
+    text = normalize_lark_tables(text)
     pattern = re.compile(rf"^SRC-{re.escape(today)}-(\d+)$")
     maximum = 0
     for line in text.splitlines():

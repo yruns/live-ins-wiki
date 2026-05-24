@@ -7,6 +7,8 @@ import argparse
 import sys
 from dataclasses import dataclass
 
+from lark_markdown import normalize_lark_tables
+
 
 HEADERS = [
     "source_id",
@@ -118,6 +120,7 @@ def row_values(header: list[str], cells: list[str]) -> dict[str, str]:
 
 
 def upsert(text: str, row: Row) -> str:
+    text = normalize_lark_tables(text)
     lines = text.splitlines()
     header_index = None
     header: list[str] = HEADERS

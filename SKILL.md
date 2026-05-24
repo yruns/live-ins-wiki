@@ -44,6 +44,7 @@ metadata:
 - 不能从聊天历史、示例命令或猜测中隐式选择目标 Wiki。先查 `~/.lark-llm-wiki/registry.json`；如果 registry 有明确 current 或用户给了可唯一解析的名称 / root URL，可以直接使用并在输出里说明选中的 Wiki。若 registry 为空或候选不唯一，再问用户。
 - 新增文档、创建页面、导入来源、移动文档或创建快捷方式前，目标 Wiki 必须来自用户本轮明确指定、registry current、或 registry 中唯一匹配的名称。
 - 不能随意创建独立知识库空间。新建 LLM Wiki 必须挂在用户确认的已有大知识库文档节点下面，以文件 / 子文件形式展开。
+- 如果用户明确把一个已有 Wiki 文档节点指定为知识库根节点，且该节点尚未包含标准结构，用 `wiki-bootstrap-root` 在当前节点下补齐结构；不要再额外创建 `LLM Wiki` 子入口。
 - 不能用一个 Lark 文档加链接冒充 Wiki；唯一合法结构是真实 Lark Wiki node tree。
 - `/wiki/` token 必须先解析，不能直接当 doc token 用。
 - Lark doc/wiki 来源默认创建快捷方式到 `raw/...`；移动原文档进 Wiki 需要用户明确批准。
@@ -92,7 +93,10 @@ metadata:
 ```bash
 # 认证和初始化
 scripts/lark_wiki.sh auth
+
+# 二选一：在父节点下新建 LLM Wiki 入口，或把当前节点补齐为 LLM Wiki 根节点
 scripts/init_lark_wiki_tree.sh "$CONFIRMED_PARENT_WIKI_DOC_NODE" "LLM Wiki"
+scripts/lark_wiki.sh wiki-bootstrap-root "$CONFIRMED_LLM_WIKI_ROOT_NODE"
 
 # 读取和写入 Lark 文档 / Wiki 节点
 scripts/lark_wiki.sh stat "$DOC_OR_WIKI_URL"
@@ -176,7 +180,7 @@ lw_wiki_query_plan @current "GLUP 是什么"
 ```bash
 python3 -m unittest tests/test_static_contract.py
 bash -n scripts/lark_wiki.sh scripts/init_lark_wiki_tree.sh
-python3 -m py_compile scripts/extract_local_file.py scripts/manifest_upsert.py scripts/source_id_next.py scripts/index_upsert.py scripts/wiki_registry.py scripts/manifest_find.py scripts/manifest_lint.py
+python3 -m py_compile scripts/extract_local_file.py scripts/manifest_upsert.py scripts/source_id_next.py scripts/index_upsert.py scripts/wiki_registry.py scripts/manifest_find.py scripts/manifest_lint.py scripts/lark_markdown.py
 python3 /Users/bytedance/.codex/skills/.system/skill-creator/scripts/quick_validate.py .
 python3 /Users/bytedance/.codex/skills/.system/skill-creator/scripts/quick_validate.py /Users/bytedance/.codex/skills/llm-wiki-lark
 ```

@@ -8,6 +8,7 @@ import datetime as dt
 import json
 import os
 import sys
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -51,9 +52,12 @@ def load(path: Path) -> dict[str, Any]:
 
 def save(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    tmp.replace(path)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    try:
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        tmp.replace(path)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def normalize_entry(entry: dict[str, Any]) -> dict[str, Any]:

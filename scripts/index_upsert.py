@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import sys
 
+from lark_markdown import normalize_lark_tables
+
 
 SOURCE_HEADERS = ["Page", "Source ID", "Type", "Summary", "Compiled Into", "Status", "Last Updated"]
 
@@ -83,6 +85,7 @@ def find_section(lines: list[str], section: str) -> tuple[int, int]:
 
 
 def upsert(text: str, section: str, headers: list[str], key_column: str, values: dict[str, str]) -> str:
+    text = normalize_lark_tables(text)
     lines = text.splitlines()
     _, section_end = find_section(lines, section)
     header_index = None

@@ -1602,6 +1602,154 @@ lw_wiki_health() {
   fi
 }
 
+_lw_wiki_write_standard_content() {
+  local kind="$1"
+  local title="$2"
+  local obj_token="$3"
+  local root_title="$4"
+  case "$kind" in
+    agents)
+      _lw_render_template AGENTS.md "$root_title" | lw_write "$obj_token" - >/dev/null
+      ;;
+    index)
+      _lw_render_template INDEX.md "$root_title" | lw_write "$obj_token" - >/dev/null
+      ;;
+    log)
+      _lw_render_template LOG.md "$root_title" | lw_write "$obj_token" - >/dev/null
+      ;;
+    sources)
+      _lw_render_template SOURCES.md "$root_title" | lw_write "$obj_token" - >/dev/null
+      ;;
+    raw-root)
+      lw_write "$obj_token" - >/dev/null <<'EOF'
+# raw
+
+来源材料放在这个节点下面。已有 Lark 文档或 Wiki 页面优先用 Wiki 快捷方式挂载；本地文件原件必须先上传，再把抽取文本放入 raw/extracts。
+EOF
+      ;;
+    wiki-root)
+      lw_write "$obj_token" - >/dev/null <<'EOF'
+# wiki
+
+编译后的、有 source_refs 支撑的知识放在这个节点下面。
+EOF
+      ;;
+    raw-cat)
+      lw_write "$obj_token" - >/dev/null <<EOF
+# raw/$title
+
+这里存放 raw/$title 类型的来源、快捷方式或抽取产物。source_refs: []
+EOF
+      ;;
+    wiki-cat)
+      lw_write "$obj_token" - >/dev/null <<EOF
+# wiki/$title
+
+编译后的 wiki/$title 页面放在这里。所有事实必须有 source_refs。
+EOF
+      ;;
+    *)
+      printf '未知标准节点类型: %s\n' "$kind" >&2
+      return 2
+      ;;
+  esac
+}
+
+_lw_wiki_ensure_standard_child() {
+  local space_id="$1"
+  local parent_node="$2"
+  local title="$3"
+  local kind="$4"
+  local root_title="$5"
+  local existing created obj_token
+  existing="$(lw_wiki_find_child "$space_id" "$parent_node" "$title")"
+  if [[ -n "$existing" ]]; then
+    printf '%s\n' "$existing" | jq -c --arg status "existing" '. + {status: $status}'
+    return 0
+  fi
+  created="$(lw_wiki_create_node "$space_id" "$parent_node" "$title")"
+  obj_token="$(printf '%s\n' "$created" | _lw_node_field obj_token)"
+  if [[ -z "$obj_token" ]]; then
+    printf '创建标准节点后缺少 obj_token: %s\n' "$title" >&2
+    return 1
+  fi
+  _lw_wiki_write_standard_content "$kind" "$title" "$obj_token" "$root_title"
+  printf '%s\n' "$created" | jq -c --arg status "created" '(.data.node // .node // .) + {status: $status}'
+}
+
+lw_wiki_bootstrap_root() {
+  _lw_need jq
+  local target="${1:-}"
+  local root_title="${2:-}"
+  local resolved code space_id root_node obj_type node_type root_url
+  local child_json raw_json raw_node wiki_json wiki_node title kind
+  if [[ -z "$target" ]]; then
+    printf '用法: lw_wiki_bootstrap_root WIKI_ROOT_NODE_URL_OR_TOKEN [ROOT_TITLE]\n' >&2
+    return 2
+  fi
+  resolved="$(lw_wiki_get_node "$target")"
+  code="$(printf '%s\n' "$resolved" | jq -r '.code // 0')"
+  [[ "$code" == "0" ]] || {
+    printf '无法解析 Wiki 节点: %s\n' "$target" >&2
+    return 1
+  }
+  space_id="$(printf '%s\n' "$resolved" | _lw_node_field space_id)"
+  root_node="$(printf '%s\n' "$resolved" | _lw_node_field node_token)"
+  obj_type="$(printf '%s\n' "$resolved" | _lw_node_field obj_type)"
+  node_type="$(printf '%s\n' "$resolved" | _lw_node_field node_type)"
+  if [[ -z "$root_title" ]]; then
+    root_title="$(printf '%s\n' "$resolved" | _lw_node_field title)"
+  fi
+  [[ -n "$root_title" ]] || root_title="$root_node"
+  [[ -n "$space_id" && -n "$root_node" ]] || {
+    printf '解析结果缺少 space_id 或 node_token: %s\n' "$target" >&2
+    return 1
+  }
+  [[ "$obj_type" == "docx" || "$obj_type" == "doc" ]] || {
+    printf 'LLM Wiki 根节点必须是文档型 Wiki 节点，当前 obj_type=%s\n' "$obj_type" >&2
+    return 2
+  }
+  [[ "$node_type" == "origin" ]] || {
+    printf 'LLM Wiki 根节点必须是 origin 节点，当前 node_type=%s\n' "$node_type" >&2
+    return 2
+  }
+
+  for child_json in "AGENTS.md:agents" "INDEX:index" "LOG:log" "SOURCES:sources"; do
+    title="${child_json%%:*}"
+    kind="${child_json##*:}"
+    _lw_wiki_ensure_standard_child "$space_id" "$root_node" "$title" "$kind" "$root_title" >/dev/null
+  done
+
+  raw_json="$(_lw_wiki_ensure_standard_child "$space_id" "$root_node" "raw" raw-root "$root_title")"
+  raw_node="$(printf '%s\n' "$raw_json" | jq -r '.node_token // empty')"
+  [[ -n "$raw_node" ]] || {
+    printf '无法解析 raw 节点\n' >&2
+    return 1
+  }
+  for title in "${LW_RAW_CATEGORIES[@]}"; do
+    _lw_wiki_ensure_standard_child "$space_id" "$raw_node" "$title" raw-cat "$root_title" >/dev/null
+  done
+
+  wiki_json="$(_lw_wiki_ensure_standard_child "$space_id" "$root_node" "wiki" wiki-root "$root_title")"
+  wiki_node="$(printf '%s\n' "$wiki_json" | jq -r '.node_token // empty')"
+  [[ -n "$wiki_node" ]] || {
+    printf '无法解析 wiki 节点\n' >&2
+    return 1
+  }
+  for title in "${LW_WIKI_CATEGORIES[@]}"; do
+    _lw_wiki_ensure_standard_child "$space_id" "$wiki_node" "$title" wiki-cat "$root_title" >/dev/null
+  done
+
+  root_url="$(printf 'https://bytedance.larkoffice.com/wiki/%s' "$root_node")"
+  _lw_wiki_registry_record_parts "$root_url" "$root_title" "$space_id" "$root_node" "$target" || true
+  jq -n \
+    --arg root_url "$root_url" \
+    --arg root_title "$root_title" \
+    --arg space_id "$space_id" \
+    --arg root_node "$root_node" \
+    '{ok: true, action: "bootstrap_root", root_url: $root_url, root_title: $root_title, space_id: $space_id, root_node: $root_node}'
+}
+
 lw_wiki_init_tree() {
   _lw_need jq
   local space_id="$1"
@@ -1774,7 +1922,7 @@ lw_usage() {
   wiki-audit-source-coverage-plan, wiki-query-plan, wiki-read-pages,
   wiki-read-raw, wiki-health, wiki-lint-plan, wiki-graph-plan,
   wiki-drift-plan, wiki-manifest-upsert, wiki-registry-list,
-  wiki-registry-current, wiki-registry-record
+  wiki-registry-current, wiki-registry-record, wiki-bootstrap-root
 
 函数模式:
   lw_search QUERY [PAGE_SIZE]
@@ -1816,6 +1964,7 @@ lw_usage() {
   lw_wiki_import_local_file LLM_WIKI_ROOT_URL LOCAL_FILE [raw-category] [TITLE]          # 兼容别名：stage
   lw_wiki_move_doc_to_wiki SPACE_ID PARENT_NODE_TOKEN OBJ_TOKEN [OBJ_TYPE] [APPLY]
   lw_wiki_init_tree SPACE_ID ROOT_TITLE PARENT_NODE_TOKEN
+  lw_wiki_bootstrap_root WIKI_ROOT_NODE_URL_OR_TOKEN [ROOT_TITLE]
   lw_upload_file LOCAL_FILE [DRIVE_FOLDER_TOKEN] [UPLOAD_NAME]
   lw_extract_local LOCAL_FILE [OUTPUT.md|-]
   lw_prepare_local_source LOCAL_FILE DRIVE_FOLDER_TOKEN OUTPUT.md [UPLOAD_NAME]
@@ -1878,6 +2027,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     wiki-lint-plan) lw_wiki_lint_plan "$@" ;;
     wiki-graph-plan) lw_wiki_graph_plan "$@" ;;
     wiki-drift-plan) lw_wiki_drift_plan "$@" ;;
+    wiki-bootstrap-root) lw_wiki_bootstrap_root "$@" ;;
     wiki-manifest-upsert) lw_wiki_manifest_upsert "$@" ;;
     wiki-manifest-append) lw_wiki_manifest_append "$@" ;;
     wiki-import-doc-shortcut) lw_wiki_import_doc_shortcut "$@" ;;

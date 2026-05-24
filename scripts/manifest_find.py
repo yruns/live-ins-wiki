@@ -7,7 +7,7 @@ import argparse
 import sys
 from collections.abc import Iterable
 
-from manifest_upsert import HEADERS, is_manifest_header, is_separator, row_values, split_row
+from manifest_upsert import HEADERS, is_manifest_header, is_separator, normalize_lark_tables, row_values, split_row
 
 
 def meaningful(value: str | None) -> bool:
@@ -15,6 +15,7 @@ def meaningful(value: str | None) -> bool:
 
 
 def manifest_rows(text: str) -> Iterable[dict[str, str]]:
+    text = normalize_lark_tables(text)
     lines = text.splitlines()
     header: list[str] | None = None
     start = 0
