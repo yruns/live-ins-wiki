@@ -4,7 +4,7 @@ source_id: SRC-YYYY-MM-DD-001
 slug: sources/<stable-slug>
 title: ""
 kind: doc
-status: compiled
+status: compiled_unverified
 raw_node: ""
 origin: ""
 imported_at: ""
@@ -60,4 +60,3 @@ review_state: unreviewed
 
 | Claim ID | Included? | Target Page | Status | Notes |
 |---|---|---|---|---|
-

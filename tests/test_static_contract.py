@@ -8,11 +8,16 @@ LLM Wiki 协议上互相漂移。
 from __future__ import annotations
 
 import re
+import subprocess
 import unittest
 from pathlib import Path
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[1]
+TEXT_SUFFIXES = {".md", ".sh", ".py", ".yaml", ".yml"}
+MAX_LINE_LENGTH = 800
 
 
 def read(rel: str) -> str:
@@ -28,7 +33,109 @@ def mentions_path(text: str, path: str) -> bool:
     return re.search(rf"{re.escape(parent)}/[\s\S]{{0,600}}{re.escape(child.rstrip('/'))}/?", text) is not None
 
 
+def parse_frontmatter(rel: str) -> dict:
+    text = read(rel)
+    assert text.startswith("---\n"), f"{rel} must start with YAML frontmatter"
+    try:
+      _, frontmatter, _ = text.split("---", 2)
+    except ValueError as exc:
+      raise AssertionError(f"{rel} has malformed YAML frontmatter") from exc
+    data = yaml.safe_load(frontmatter)
+    assert isinstance(data, dict), f"{rel} frontmatter must parse as a mapping"
+    return data
+
+
 class StaticContractTest(unittest.TestCase):
+    def test_no_collapsed_or_extreme_lines(self) -> None:
+        for path in ROOT.rglob("*"):
+            if ".git" in path.parts or not path.is_file() or path.suffix not in TEXT_SUFFIXES:
+                continue
+            with self.subTest(file=str(path.relative_to(ROOT))):
+                for index, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+                    self.assertLessEqual(
+                        len(line),
+                        MAX_LINE_LENGTH,
+                        f"{path.relative_to(ROOT)}:{index} line too long: {len(line)}",
+                    )
+
+    def test_scripts_and_yaml_are_parseable(self) -> None:
+        subprocess.run(["bash", "-n", "scripts/lark_wiki.sh"], cwd=ROOT, check=True)
+        subprocess.run(["bash", "-n", "scripts/init_lark_wiki_tree.sh"], cwd=ROOT, check=True)
+        subprocess.run(
+            ["python3", "-m", "py_compile", "scripts/extract_local_file.py"],
+            cwd=ROOT,
+            check=True,
+        )
+        with (ROOT / "agents/openai.yaml").open(encoding="utf-8") as file:
+            data = yaml.safe_load(file)
+        self.assertEqual(data["display_name"], "Lark LLM Wiki")
+        self.assertIn("interface", data)
+
+    def test_manifest_upsert_updates_existing_source(self) -> None:
+        sample = "\n".join(
+            [
+                "# SOURCES",
+                "",
+                "| source_id | title | kind | raw_node | origin | imported_at | checksum | extraction | source_page | compiled_into | compile_status | audit_status | review_state |",
+                "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+                "| SRC-1 | Old | doc | raw/docs/Old | url | t0 | - | - | - | - | staged | pending | unreviewed |",
+                "",
+            ]
+        )
+        result = subprocess.run(
+            [
+                "python3",
+                "scripts/manifest_upsert.py",
+                "--source-id",
+                "SRC-1",
+                "--title",
+                "Old",
+                "--kind",
+                "doc",
+                "--raw-node",
+                "raw/docs/Old",
+                "--origin",
+                "url",
+                "--imported-at",
+                "t0",
+                "--checksum",
+                "sha256:abc",
+                "--extraction",
+                "raw/extracts/Old",
+                "--source-page",
+                "wiki/sources/Old",
+                "--compiled-into",
+                "wiki/concepts/foo",
+                "--compile-status",
+                "compiled",
+                "--audit-status",
+                "audited",
+                "--review-state",
+                "reviewed",
+            ],
+            cwd=ROOT,
+            input=sample,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        self.assertEqual(result.stdout.count("| SRC-1 |"), 1)
+        self.assertIn("| SRC-1 | Old | doc | raw/docs/Old | url | t0 | sha256:abc |", result.stdout)
+        self.assertIn("| wiki/sources/Old | wiki/concepts/foo | compiled | audited | reviewed |", result.stdout)
+
+    def test_skill_and_templates_have_parseable_frontmatter(self) -> None:
+        skill = parse_frontmatter("SKILL.md")
+        self.assertEqual(skill["name"], "llm-wiki-lark")
+        self.assertIn("description", skill)
+        self.assertIn("metadata", skill)
+
+        for path in sorted((ROOT / "references" / "templates").glob("*.md")):
+            rel = str(path.relative_to(ROOT))
+            with self.subTest(template=rel):
+                data = parse_frontmatter(rel)
+                self.assertIn("type", data)
+                self.assertIn("source_refs", data)
+
     def test_schema_directories_are_consistent(self) -> None:
         expected = [
             "SOURCES",
@@ -104,8 +211,11 @@ class StaticContractTest(unittest.TestCase):
             "lw_wiki_read_pages",
             "lw_wiki_read_raw",
             "lw_wiki_health",
+            "lw_wiki_manifest_upsert",
             "lw_wiki_manifest_append",
             "lw_wiki_lint_plan",
+            "lw_wiki_graph_plan",
+            "lw_wiki_drift_plan",
         ]
         for fn in functions:
             with self.subTest(function=fn):
@@ -113,6 +223,11 @@ class StaticContractTest(unittest.TestCase):
                 self.assertIn(fn.replace("_", "-").removeprefix("lw-"), script)
         self.assertIn("Status: staged only. Not compiled.", script)
         self.assertIn("Completeness: partial", script)
+        self.assertIn("missing YAML frontmatter", script)
+        self.assertIn("missing source_refs", script)
+        self.assertIn("SOURCES has staged/extracted rows", script)
+        self.assertIn("compiled_unverified", script)
+        self.assertIn("graph/backlink audit", script)
 
     def test_init_dry_run_plans_full_tree(self) -> None:
         init = read("scripts/init_lark_wiki_tree.sh")

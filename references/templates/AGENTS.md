@@ -1,3 +1,11 @@
+---
+type: agent_contract
+title: AGENTS.md
+source_refs: []
+schema_customization: pending
+generated_by: llm-wiki-lark
+---
+
 # AGENTS.md
 
 这是 `{{ROOT_TITLE}}` 的 runtime schema。维护本 Wiki 时，优先遵守本页，其次遵守 skill repo 的默认规则。
@@ -15,7 +23,34 @@ This Wiki is a Lark/Feishu implementation of a Karpathy-style LLM Wiki. It store
 - If a new source conflicts with an existing claim, add or update `wiki/disputed`.
 - Import/Stage only means a source is recorded in `raw` and `SOURCES`; it is not compiled.
 - Compile means claims are integrated into relevant `wiki/*` pages, `INDEX`, `SOURCES`, and `LOG`.
+- `compiled_unverified` is the only allowed status before Coverage Audit completes.
 - Destructive edits require a short write plan before execution.
+- Never write Lark access tokens, app secrets, cookies, auth headers, personal credentials, or debug secrets into Wiki pages, `SOURCES`, `INDEX`, or `LOG`.
+
+## Domain
+
+- Name: pending
+- Primary use case: pending
+- Source types: pending
+- Core entities: pending
+- Core concepts: pending
+- Required page types: pending
+
+## Controlled Tags
+
+- domain/pending
+- source/doc
+- source/wiki
+- source/local-file
+- status/staged
+- status/extracted
+- status/compiled-unverified
+- status/compiled
+- status/audited
+- status/drifted
+- review/unreviewed
+- review/reviewed
+- review/needs-human-review
 
 ## Directory Contract
 
@@ -65,6 +100,8 @@ Create entity/concept pages only when the item is central to multiple sources, n
 
 For each important claim, record whether it was included, excluded, disputed, or needs human review. If compiled pages cannot answer diagnostic questions without raw fallback, mark a coverage gap and update the compiled pages.
 
+A source is not `compiled` until every key claim has an audit status.
+
 ## Query Workflow
 
 Use index-first selective reading. Read `INDEX` and `SOURCES`, choose compiled pages, then read raw only when compiled pages are insufficient. Answers should cite compiled pages first and raw fallback second.
@@ -77,3 +114,10 @@ Run a low-cost structure check before semantic work: directories, `INDEX`, `SOUR
 
 Use LLM judgment to find contradictions, stale claims, missing concepts, orphan pages, weak citations, source drift, unresolved disputes, and compilation gaps.
 
+## Graph / Backlink Audit
+
+Report orphan pages, broken links, duplicate aliases/slugs, and pages with weak relationship structure. Do not auto-create pages from broken links.
+
+## Mutation Plan
+
+Before modifying existing compiled pages, produce a mutation plan listing pages to create, update, mark disputed, and update in `INDEX`, `SOURCES`, and `LOG`.

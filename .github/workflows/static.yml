@@ -11,6 +11,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Install Python test deps
+        run: python3 -m pip install pyyaml
       - name: Python tests
         run: python3 -m unittest tests/test_static_contract.py
       - name: Shell syntax

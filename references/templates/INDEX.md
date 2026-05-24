@@ -1,7 +1,12 @@
-# INDEX
+---
+type: index
+title: INDEX
+last_updated: "{{DATE}}"
+source_refs: []
+generated_by: llm-wiki-lark
+---
 
-> last_updated: {{DATE}}
-> source_refs: []
+# INDEX
 
 ## Sources
 
@@ -47,4 +52,3 @@
 
 | Page | Target Source | Status | Last Updated |
 |---|---|---|---|
-

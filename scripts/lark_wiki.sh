@@ -567,7 +567,7 @@ _lw_wiki_append_index_source() {
     lw_append "$index_obj" - >/dev/null
 }
 
-lw_wiki_manifest_append() {
+lw_wiki_manifest_upsert() {
   _lw_need jq
   local wiki_root="$1"
   local source_id="$2"
@@ -582,14 +582,37 @@ lw_wiki_manifest_append() {
   local compile_status="${11:-staged}"
   local audit_status="${12:-pending}"
   local review_state="${13:-unreviewed}"
-  local root_parts space_id root_node sources_obj
+  local root_parts space_id root_node sources_obj current updated py
   root_parts="$(_lw_wiki_root_parts "$wiki_root")" || return $?
   space_id="$(printf '%s\n' "$root_parts" | jq -r '.space_id')"
   root_node="$(printf '%s\n' "$root_parts" | jq -r '.root_node')"
   sources_obj="$(_lw_wiki_child_obj "$space_id" "$root_node" "SOURCES")" || return $?
-  printf '| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n' \
-    "$source_id" "$title" "$kind" "$raw_node" "$origin" "$(_lw_now)" "$checksum" "$extraction" "$source_page" "$compiled_into" "$compile_status" "$audit_status" "$review_state" |
-    lw_append "$sources_obj" - >/dev/null
+  py="$(_lw_python)"
+  [[ -n "$py" ]] || {
+    printf '缺少 python3，无法 upsert SOURCES manifest\n' >&2
+    return 127
+  }
+  current="$(lw_cat "$sources_obj")"
+  updated="$(printf '%s\n' "$current" | "$py" "$LW_SCRIPT_DIR/manifest_upsert.py" \
+    --source-id "$source_id" \
+    --title "$title" \
+    --kind "$kind" \
+    --raw-node "$raw_node" \
+    --origin "$origin" \
+    --imported-at "$(_lw_now)" \
+    --checksum "$checksum" \
+    --extraction "$extraction" \
+    --source-page "$source_page" \
+    --compiled-into "$compiled_into" \
+    --compile-status "$compile_status" \
+    --audit-status "$audit_status" \
+    --review-state "$review_state")"
+  printf '%s\n' "$updated" | lw_write "$sources_obj" - >/dev/null
+}
+
+lw_wiki_manifest_append() {
+  printf 'lw_wiki_manifest_append 已兼容为 upsert；SOURCES 以 source_id 为准更新当前状态。\n' >&2
+  lw_wiki_manifest_upsert "$@"
 }
 
 _lw_truncated_cat() {
@@ -1146,6 +1169,7 @@ lw_wiki_compile_source_plan() {
   printf -- '- Put conflicts in `wiki/disputed`.\n'
   printf -- '- Update `INDEX`, `SOURCES`, and `LOG`.\n'
   printf -- '- Complete Coverage Audit and create `wiki/audits/<source-id>-coverage` when useful.\n'
+  printf -- '- Gate: do not mark `SOURCES.compile_status` as `compiled` until Coverage Audit is complete; use `compiled_unverified` before that.\n'
 }
 
 lw_wiki_audit_source_coverage_plan() {
@@ -1203,11 +1227,63 @@ lw_wiki_lint_plan() {
   printf -- '- coverage gaps where raw fallback is still needed\n'
 }
 
+lw_wiki_graph_plan() {
+  _lw_need jq
+  local wiki_root="$1"
+  local root_parts space_id root_node
+  if [[ -z "$wiki_root" ]]; then
+    printf '用法: lw_wiki_graph_plan LLM_WIKI_ROOT_URL\n' >&2
+    return 2
+  fi
+  root_parts="$(_lw_wiki_root_parts "$wiki_root")" || return $?
+  space_id="$(printf '%s\n' "$root_parts" | jq -r '.space_id')"
+  root_node="$(printf '%s\n' "$root_parts" | jq -r '.root_node')"
+
+  printf '# Graph / Backlink Audit Plan\n\n'
+  printf -- '- Completeness: partial\n\n'
+  printf '> graph/backlink audit should inspect logical slugs, Markdown links, source_refs, and page relationships without auto-creating pages from broken links.\n\n'
+  _lw_wiki_print_root_context "$space_id" "$root_node" 15000
+  _lw_wiki_print_catalog "$space_id" "$root_node"
+  printf '\n# Graph Checks\n\n'
+  printf -- '- orphan pages: no inbound or outbound logical links\n'
+  printf -- '- broken internal links: link target missing or ambiguous\n'
+  printf -- '- duplicate aliases or slugs\n'
+  printf -- '- pages with many mentions but no canonical page\n'
+  printf -- '- source support edges: sources -> concepts/entities/syntheses\n'
+  printf -- '- do not create pages automatically from broken links; report repair options first\n'
+}
+
+lw_wiki_drift_plan() {
+  _lw_need jq
+  local wiki_root="$1"
+  local root_parts space_id root_node
+  if [[ -z "$wiki_root" ]]; then
+    printf '用法: lw_wiki_drift_plan LLM_WIKI_ROOT_URL\n' >&2
+    return 2
+  fi
+  root_parts="$(_lw_wiki_root_parts "$wiki_root")" || return $?
+  space_id="$(printf '%s\n' "$root_parts" | jq -r '.space_id')"
+  root_node="$(printf '%s\n' "$root_parts" | jq -r '.root_node')"
+
+  printf '# Source Drift Audit Plan\n\n'
+  printf -- '- Completeness: partial\n\n'
+  printf '> Compare SOURCES checksum / extraction / raw node metadata against current raw source state. If drift is detected, mark source as `drifted` and dependent pages as `needs_reverification` before recompile.\n\n'
+  _lw_wiki_print_root_context "$space_id" "$root_node" 25000
+  _lw_wiki_print_catalog "$space_id" "$root_node"
+  printf '\n# Drift Checks\n\n'
+  printf -- '- local files: sha256(file bytes), sha256(extracted text), extractor version\n'
+  printf -- '- Lark docs/wiki: node_token, obj_token, last modified time or exported text checksum when available\n'
+  printf -- '- staged/extracted/compiled sources whose raw hash changed\n'
+  printf -- '- compiled pages whose source_refs point to drifted sources\n'
+  printf -- '- append LOG drift event and request recompile before updating reviewed claims\n'
+}
+
 lw_wiki_health() {
   _lw_need jq
   local wiki_root="$1"
   local root_parts space_id root_node raw_node wiki_node
   local failures=0 warnings=0 child node obj category category_node children duplicate_count source_obj index_obj log_obj
+  local node_json title obj_token obj_type body first_line source_text
   if [[ -z "$wiki_root" ]]; then
     printf '用法: lw_wiki_health LLM_WIKI_ROOT_URL\n' >&2
     return 2
@@ -1255,6 +1331,32 @@ lw_wiki_health() {
           printf 'WARN wiki/%s has duplicate titles: %s groups\n' "$category" "$duplicate_count"
           warnings=$((warnings + 1))
         fi
+        while IFS= read -r node_json; do
+          [[ -n "$node_json" ]] || continue
+          title="$(printf '%s\n' "$node_json" | jq -r '.title // empty')"
+          obj_token="$(printf '%s\n' "$node_json" | jq -r '.obj_token // empty')"
+          obj_type="$(printf '%s\n' "$node_json" | jq -r '.obj_type // empty')"
+          case "$obj_type" in
+            doc|docx) ;;
+            *) continue ;;
+          esac
+          [[ -n "$obj_token" ]] || continue
+          body="$(lw_cat "$obj_token" 2>/dev/null || true)"
+          if [[ -z "${body//[[:space:]]/}" ]]; then
+            printf 'WARN wiki/%s/%s empty or unreadable\n' "$category" "$title"
+            warnings=$((warnings + 1))
+            continue
+          fi
+          first_line="$(printf '%s\n' "$body" | sed -n '1p')"
+          if [[ "$first_line" != "---" ]]; then
+            printf 'WARN wiki/%s/%s missing YAML frontmatter\n' "$category" "$title"
+            warnings=$((warnings + 1))
+          fi
+          if ! printf '%s\n' "$body" | grep -q '^source_refs:'; then
+            printf 'WARN wiki/%s/%s missing source_refs\n' "$category" "$title"
+            warnings=$((warnings + 1))
+          fi
+        done < <(printf '%s\n' "$children" | jq -c '.data.items[]?')
       else
         printf 'FAIL wiki/%s missing\n' "$category"
         failures=$((failures + 1))
@@ -1271,6 +1373,17 @@ lw_wiki_health() {
       failures=$((failures + 1))
     fi
   done
+  if [[ -n "$source_obj" ]]; then
+    source_text="$(lw_cat "$source_obj" 2>/dev/null || true)"
+    if ! printf '%s\n' "$source_text" | grep -q '| source_id | title | kind |'; then
+      printf 'FAIL SOURCES manifest table header missing\n'
+      failures=$((failures + 1))
+    fi
+    if printf '%s\n' "$source_text" | grep -Eq '\|[[:space:]]*(staged|extracted)[[:space:]]*\|'; then
+      printf 'WARN SOURCES has staged/extracted rows; run compile workflow for pending sources\n'
+      warnings=$((warnings + 1))
+    fi
+  fi
 
   printf '\n# Summary\n\n'
   printf -- '- failures: %s\n' "$failures"
@@ -1449,7 +1562,8 @@ lw_usage() {
 直接命令模式常用 command:
   wiki-stage-lark-doc, wiki-stage-local-file, wiki-compile-source-plan,
   wiki-audit-source-coverage-plan, wiki-query-plan, wiki-read-pages,
-  wiki-read-raw, wiki-health, wiki-lint-plan, wiki-manifest-append
+  wiki-read-raw, wiki-health, wiki-lint-plan, wiki-graph-plan,
+  wiki-drift-plan, wiki-manifest-upsert
 
 函数模式:
   lw_search QUERY [PAGE_SIZE]
@@ -1478,6 +1592,9 @@ lw_usage() {
   lw_wiki_audit_source_coverage_plan LLM_WIKI_ROOT_URL SOURCE_ID_OR_TITLE
   lw_wiki_health LLM_WIKI_ROOT_URL
   lw_wiki_lint_plan LLM_WIKI_ROOT_URL
+  lw_wiki_graph_plan LLM_WIKI_ROOT_URL
+  lw_wiki_drift_plan LLM_WIKI_ROOT_URL
+  lw_wiki_manifest_upsert LLM_WIKI_ROOT_URL SOURCE_ID TITLE KIND RAW_NODE [ORIGIN] [CHECKSUM] [EXTRACTION] [SOURCE_PAGE] [COMPILED_INTO] [COMPILE_STATUS] [AUDIT_STATUS] [REVIEW_STATE]
   lw_wiki_manifest_append LLM_WIKI_ROOT_URL SOURCE_ID TITLE KIND RAW_NODE [ORIGIN] [CHECKSUM] [EXTRACTION] [SOURCE_PAGE] [COMPILED_INTO] [COMPILE_STATUS] [AUDIT_STATUS] [REVIEW_STATE]
   lw_wiki_import_doc_shortcut LLM_WIKI_ROOT_URL WIKI_OR_DOC_URL [raw-category] [TITLE]   # 兼容别名：stage
   lw_wiki_import_local_file LLM_WIKI_ROOT_URL LOCAL_FILE [raw-category] [TITLE]          # 兼容别名：stage
@@ -1536,6 +1653,9 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     wiki-audit-source-coverage-plan) lw_wiki_audit_source_coverage_plan "$@" ;;
     wiki-health) lw_wiki_health "$@" ;;
     wiki-lint-plan) lw_wiki_lint_plan "$@" ;;
+    wiki-graph-plan) lw_wiki_graph_plan "$@" ;;
+    wiki-drift-plan) lw_wiki_drift_plan "$@" ;;
+    wiki-manifest-upsert) lw_wiki_manifest_upsert "$@" ;;
     wiki-manifest-append) lw_wiki_manifest_append "$@" ;;
     wiki-import-doc-shortcut) lw_wiki_import_doc_shortcut "$@" ;;
     wiki-import-local-file) lw_wiki_import_local_file "$@" ;;

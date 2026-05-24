@@ -96,8 +96,16 @@ SRC-YYYY-MM-DD-001
 - `staged`：来源已进入 `raw`，还没有可用抽取或 source page。
 - `extracted`：本地文件或复杂来源已抽取文本，仍未完成跨页编译。
 - `compiled`：关键 claims 已进入相关 `wiki/` 页。
+- `compiled_unverified`：页面已更新，但 coverage audit 未完成，不能当作完成状态。
 - `audited`：完成 coverage audit。
+- `drifted`：raw source 与 manifest 中的 checksum、导出文本或修改时间不一致。
 - `deprecated`：来源不再作为当前事实依据，但不能删除历史记录。
+
+Drift 字段建议：
+
+- 本地文件：`sha256(file bytes)`、`sha256(extracted text)`、`extractor`。
+- Lark doc/wiki：`node_token`、`obj_token`、可获得时记录修改时间或导出文本 checksum。
+- Drift 后依赖页面标记 `needs_reverification`，不要直接覆盖 reviewed claims。
 
 ## 引用规则
 
@@ -171,3 +179,13 @@ Passing mention 不建页，放在 source page 的 `Mentioned but not tracked`�
 - YAML frontmatter 可被导出保留。
 - Lark node URL 是物理链接；slug 是逻辑链接。
 - `INDEX`、`LOG`、`SOURCES` 使用稳定 Markdown 表格或小节格式，便于脚本和 LLM 读取。
+
+## Graph / Backlink
+
+Lark 版没有 Obsidian graph，但仍要维护逻辑图：
+
+- `source_refs` 形成 source -> page 的 support edge。
+- Markdown 链接形成 page -> page 的 relation edge。
+- `related_pages` 形成显式 cross-link。
+- Health / lint 应报告 orphan pages、broken links、重复 aliases / slugs、提及频繁但未建页的概念。
+- 不因为 broken link 自动创建页面；先报告修 link、合并、删除或建页选项。
