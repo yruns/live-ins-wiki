@@ -78,7 +78,8 @@ Bootstrap 只在当前根节点下补齐缺失的标准子节点，不覆盖已�
 使用规则：
 
 - 新请求需要目标 Wiki 时，先运行 `lw_wiki_registry_current` 或 `lw_wiki_registry_list`。
-- 如果 registry 有明确 current，或用户给的名称 / root URL 能唯一解析，可以直接使用该 root，并在输出里说明。
+- 读操作如果 registry 有明确 current，或用户给的名称 / root URL 能唯一解析，可以直接使用该 root，并在输出里说明。
+- 写操作如果用户本轮没有给 root/name/`@current`，必须先展示将写入的 registry current、会创建或修改的节点、`INDEX/SOURCES/LOG` 影响范围，并等待用户确认。
 - 如果 registry 为空、current 不存在、或名称匹配多个 Wiki，必须询问用户。
 - `lw_wiki_query_plan`、`lw_wiki_structure_lint`、`lw_wiki_health`、`lw_wiki_lint_plan`、`lw_wiki_graph_plan`、`lw_wiki_drift_plan` 支持 `@current` 或 registry 中的名称作为 root selector。
 - 每次成功解析 Wiki root 时，脚本会自动 upsert registry，更新最近访问时间。
@@ -109,30 +110,36 @@ Stage 只表示来源已进入 raw，并登记到 `SOURCES`。它不等于 compi
 3. 脚本上传原始文件，创建 `raw/<category>` 快捷方式，抽取文本，创建 `raw/extracts/<title>.extract`，登记 `SOURCES`。
 4. 如果同一 checksum 已在 `SOURCES` 中登记，复用旧 `source_id`；同标题但 checksum 不同不能自动去重。
 5. 如果上传失败，不能继续写 Wiki。
-6. 本地路径只能作为调试信息；可追溯依据是 Lark raw 文件 token、raw shortcut 和 extraction page。
+6. 默认不要把本机绝对路径写入 Wiki 或 `SOURCES`。本地路径只能在显式 debug 模式下写成脱敏形式；可追溯依据是 Lark raw 文件 token、raw shortcut 和 extraction page。
 
 ## Compile
 
-Compile 是 LLM 的核心工作，不是脚本索引。
+Compile 是 LLM 的核心工作，不是脚本索引。除非用户只要求 plan，否则不要只输出 plan 就结束；默认闭环是：
+
+```text
+stage -> compile context pack -> human checkpoint -> write pages -> INDEX/SOURCES/LOG -> structure lint
+```
 
 每个 source 的 checklist：
 
 1. 读取 `AGENTS.md`、`INDEX`、`SOURCES`、近期 `LOG`。
 2. 读取该 source 的 raw shortcut、extraction page 或已有 source page。
 3. 读取可能受影响的 `wiki/entities`、`wiki/concepts`、`wiki/comparisons`、`wiki/overviews`、`wiki/decisions`、`wiki/syntheses`、`wiki/disputed`。
-4. 创建或更新 `wiki/sources/<source>`，写 summary、key claims、entities、concepts、updates made、open questions、coverage audit。
-5. 抽取 atomic claims。每条 claim 有 `Claim ID`、`source_refs`、confidence、notes。
-6. 优先更新已有页面；只有达到建页阈值才创建 entity/concept 页面。
-7. 对比旧 claims。冲突进入 `wiki/disputed`，并在相关页面标记 `contradiction_state: disputed`。
-8. 执行目录同步：每个真实创建或更新的 `wiki/entities`、`wiki/concepts`、`wiki/comparisons`、`wiki/overviews`、`wiki/syntheses` 页面，都要写入 `INDEX` 对应 sheet/section，字段至少包含 Page、Summary、Source Count、Last Updated、Review State。Page 必须是规范纯路径（如 `wiki/concepts/foo`），不能写 Markdown link；Last Updated 必须精确到秒。
-9. 更新 `SOURCES` 的 `source_page`、`compiled_into`、`compile_status`。
-10. 如果创建或更新 `wiki/audits` 页面，也要写入 `INDEX` 的 Audits sheet/section，Page 用规范纯路径，Target Source 必须可点击。
-11. 更新 `INDEX` 的 Sources sheet/section，按 `Source ID` upsert 本 source 的状态和 compiled targets；Page 用规范纯路径，Compiled Into 必须可点击。Compiled Into 有多个 target 时，必须用单元格内换行分隔。
-12. 更新 `SOURCES` 的 `source_page`、`compiled_into`、`compile_status`。
-13. 追加 `LOG` 的 `compile` 事件。
-14. 做 coverage audit。关键 claim 未进入 compiled pages 时，写明 excluded reason 或创建 audit gap。
-15. 运行 `scripts/lark_wiki.sh wiki-structure-lint ROOT` 或 `scripts/wiki_structure_lint.sh ROOT` 触发轻量结构 lint。该检查只验证 `INDEX` 各 sheet 的 Page 列与 `wiki/*` 真实目录双向完全一致：真实目录新增页面但 INDEX 缺行是 FAIL，INDEX 有页面但真实目录不存在也是 FAIL。
-16. Coverage audit 和结构 lint 都通过前，`SOURCES.compile_status` 只能是 `compiled_unverified`。只有每个 key claim 都有 audit status 且 `wiki-structure-lint` 无失败后，才能标记为 `compiled` 或 `audited`。
+4. Human checkpoint：先给出 5-10 条 key takeaways、可能改变的现有页面、新资料和旧结论的冲突、建议 emphasis；用户确认或默认继续后再批量写入。
+5. 创建或更新 `wiki/sources/<source>`，写 summary、key claims、entities、concepts、updates made、open questions、coverage audit。
+6. 抽取 atomic claims。每条 claim 有 `Claim ID`、`source_refs`、confidence、notes。
+7. 优先更新已有页面；只有达到建页阈值才创建 entity/concept 页面。
+8. 对比旧 claims。冲突进入 `wiki/disputed`，并在相关页面标记 `contradiction_state: disputed`。
+9. write pages：实际创建或更新 source/entity/concept/comparison/overview/decision/synthesis/disputed/audit 页面。
+10. 执行目录同步：每个真实创建或更新的 `wiki/entities`、`wiki/concepts`、`wiki/comparisons`、`wiki/overviews`、`wiki/syntheses` 页面，都要写入 `INDEX` 对应 sheet/section，字段至少包含 Page、Summary、Source Count、Last Updated、Review State。Page 必须是规范纯路径（如 `wiki/concepts/foo`），不能写 Markdown link；Last Updated 必须精确到秒。
+11. 更新 `SOURCES` 的 `source_page`、`compiled_into`、`compile_status`。
+12. 如果创建或更新 `wiki/audits` 页面，也要写入 `INDEX` 的 Audits sheet/section，Page 用规范纯路径，Target Source 必须可点击。
+13. 更新 `INDEX` 的 Sources sheet/section，按 `Source ID` upsert 本 source 的状态和 compiled targets；Page 用规范纯路径，Compiled Into 必须可点击。Compiled Into 有多个 target 时，必须用单元格内换行分隔。
+14. 更新 `SOURCES` 的 `source_page`、`compiled_into`、`compile_status`。
+15. 追加 `LOG` 的 `compile` 事件。
+16. 做 coverage audit。关键 claim 未进入 compiled pages 时，写明 excluded reason 或创建 audit gap。
+17. 运行 `scripts/lark_wiki.sh wiki-structure-lint ROOT` 或 `scripts/wiki_structure_lint.sh ROOT` 触发轻量结构 lint。该检查只验证 `INDEX` 各 sheet 的 Page 列与 `wiki/*` 真实目录双向完全一致：真实目录新增页面但 INDEX 缺行是 FAIL，INDEX 有页面但真实目录不存在也是 FAIL。
+18. Coverage audit 和结构 lint 都通过前，`SOURCES.compile_status` 只能是 `compiled_unverified`。只有每个 key claim 都有 audit status 且 `wiki-structure-lint` 无失败后，才能标记为 `compiled` 或 `audited`。
 
 目录同步和 lint 是完成条件，不是可选整理项。如果 Concepts、Entities、Overviews 等真实目录中已有新页面，而 `INDEX` 没有对应行，或 `INDEX` 里残留真实目录不存在的页面，本次 compile 必须视为未完成。
 
@@ -163,7 +170,7 @@ Compile 输入处理规则：
 - Post-compile lint command and result, including `INDEX` vs real `wiki/*` directory consistency
 - Whether any operation is destructive
 
-`lw_wiki_compile_source_plan ROOT SOURCE_ID_OR_TITLE` 会输出这些上下文和写入清单，但不会替 LLM 做语义判断。
+`lw_wiki_compile_source_plan ROOT SOURCE_ID_OR_TITLE` 会输出这些上下文和写入清单，但不会替 LLM 做语义判断；LLM 必须继续执行写入闭环，除非用户明确只要 plan。
 
 ## Coverage Audit
 
@@ -266,6 +273,15 @@ Health 卡在 Lark 文档读取时，不能直接判断 Wiki 已坏或已好。�
 - low confidence 结论是否需要人工 review；
 - `wiki/disputed` 是否长期未解决；
 - `SOURCES` 中 staged/extracted 过久的 source。
+
+Lint 输出不能只停在健康报告，必须形成 repair plan：
+
+- observations
+- proposed repairs
+- pages to update
+- refs to add/remove
+- disputes to create/update
+- items requiring human approval
 
 ## Source Drift
 

@@ -117,15 +117,17 @@ _lw_api() {
 _lw_python() {
   if [[ -n "$LW_PYTHON" ]]; then
     printf '%s\n' "$LW_PYTHON"
-  elif [[ -x "/Users/bytedance/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3" ]]; then
-    printf '%s\n' "/Users/bytedance/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3"
-  else
+  elif command -v python3 >/dev/null 2>&1; then
     command -v python3
+  else
+    return 1
   fi
 }
 
 _lw_now() {
-  date +%FT%T%z
+  local ts
+  ts="$(date +%FT%T%z)"
+  printf '%s:%s\n' "${ts%??}" "${ts: -2}"
 }
 
 _lw_today() {
@@ -250,6 +252,49 @@ _lw_wiki_token_from_url() {
   else
     return 1
   fi
+}
+
+_lw_url_origin() {
+  local input="$1"
+  if [[ "$input" =~ ^(https?://[^/]+)($|/) ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+  else
+    return 1
+  fi
+}
+
+_lw_wiki_url_from_base() {
+  local base="$1"
+  local root_node="$2"
+  base="${base%/}"
+  if [[ "$base" == */wiki ]]; then
+    printf '%s/%s\n' "$base" "$root_node"
+  else
+    printf '%s/wiki/%s\n' "$base" "$root_node"
+  fi
+}
+
+_lw_wiki_root_url() {
+  local root_node="$1"
+  local origin="${2:-}"
+  local node_json="${3:-}"
+  local base node_url
+  if base="$(_lw_url_origin "$origin")"; then
+    _lw_wiki_url_from_base "$base" "$root_node"
+    return 0
+  fi
+  if [[ -n "$node_json" ]]; then
+    node_url="$(printf '%s\n' "$node_json" | jq -r '.url // .data.node.url // .node.url // empty' 2>/dev/null || true)"
+    if [[ -n "$node_url" ]] && base="$(_lw_url_origin "$node_url")"; then
+      _lw_wiki_url_from_base "$base" "$root_node"
+      return 0
+    fi
+  fi
+  if [[ -n "${LARK_WIKI_BASE_URL:-}" ]]; then
+    _lw_wiki_url_from_base "$LARK_WIKI_BASE_URL" "$root_node"
+    return 0
+  fi
+  printf '%s\n' "$root_node"
 }
 
 _lw_doc_token_from_url() {
@@ -648,7 +693,7 @@ _lw_wiki_root_parts() {
   space_id="$(printf '%s\n' "$root_json" | _lw_node_field space_id)"
   root_node="$(printf '%s\n' "$root_json" | _lw_node_field node_token)"
   root_title="$(printf '%s\n' "$root_json" | _lw_node_field title)"
-  root_url="$(printf 'https://bytedance.larkoffice.com/wiki/%s' "$root_node")"
+  root_url="$(_lw_wiki_root_url "$root_node" "$wiki_root" "$root_json")"
   [[ -n "$space_id" && -n "$root_node" ]] || {
     printf '无法解析 LLM Wiki 根节点: %s\n' "$wiki_root" >&2
     return 1
@@ -1735,7 +1780,7 @@ lw_wiki_stage_local_file() {
   local root_parts space_id root_node raw_node category_node extracts_node
   local file_abs basename existing_raw upload_json file_token shortcut_json
   local shortcut_title shortcut_url shortcut_node extract_title existing_extract extract_json
-  local extract_url extract_node extracted source_id checksum raw_path extract_path existing_source_id
+  local extract_url extract_node extracted source_id checksum raw_path extract_path existing_source_id origin_ref
 
   if [[ ! -f "$file" ]]; then
     printf '本地文件不存在或不是普通文件: %s\n' "$file" >&2
@@ -1789,6 +1834,7 @@ lw_wiki_stage_local_file() {
   shortcut_title="$(printf '%s\n' "$shortcut_json" | jq -r '.title // .data.node.title // .node.title // empty')"
   shortcut_url="$(printf '%s\n' "$shortcut_json" | jq -r '.url // .data.node.url // .node.url // empty')"
   shortcut_node="$(printf '%s\n' "$shortcut_json" | jq -r '.node_token // .data.node.node_token // .node.node_token // empty')"
+  origin_ref="${shortcut_url:-lark-file:$file_token}"
 
   extracted="$(mktemp -t lark-wiki-local-extract.XXXXXX.md)"
   lw_extract_local "$file_abs" "$extracted" >/dev/null
@@ -1806,7 +1852,9 @@ lw_wiki_stage_local_file() {
         printf -- '- raw_url: %s\n' "$shortcut_url"
       fi
       printf -- '- uploaded_file_token: %s\n' "$file_token"
-      printf -- '- local_path: %s\n' "$file_abs"
+      if [[ "${LARK_WIKI_INCLUDE_LOCAL_PATH:-}" == "1" || "${LARK_WIKI_INCLUDE_LOCAL_PATH:-}" == "true" ]]; then
+        printf -- '- local_path_debug: %s\n' "${file_abs/#$HOME/~}"
+      fi
       printf -- '- extracted_at: %s\n' "$(_lw_now)"
       printf -- '- extractor: scripts/extract_local_file.py\n'
       printf -- '- status: extracted_only_not_compiled\n\n'
@@ -1825,7 +1873,7 @@ lw_wiki_stage_local_file() {
       --kind local_file \
       --checksum "$checksum" \
       --raw-node "$raw_path" \
-      --origin "$file_abs" 2>/dev/null || true)"
+      --origin "$origin_ref" 2>/dev/null || true)"
   fi
   if [[ -n "$existing_source_id" ]]; then
     source_id="$existing_source_id"
@@ -1834,7 +1882,7 @@ lw_wiki_stage_local_file() {
   fi
 
   lw_wiki_manifest_append "$wiki_root" "$source_id" "$shortcut_title" local_file \
-    "$raw_path" "$file_abs" "$checksum" "$extract_path" "-" "-" extracted pending unreviewed
+    "$raw_path" "$origin_ref" "$checksum" "$extract_path" "-" "-" extracted pending unreviewed
   _lw_wiki_append_index_source "$space_id" "$root_node" "$raw_path" "$source_id" local_file "extracted local file" extracted
   _lw_wiki_append_log "$space_id" "$root_node" "import" "$source_id" "Stage local file as $raw_path and $extract_path"
 
@@ -2105,9 +2153,17 @@ lw_wiki_compile_source_plan() {
   printf '# Compile Source Plan\n\n'
   printf -- '- source_ref: %s\n' "$source_ref"
   printf -- '- Completeness: partial\n\n'
-  printf '> 本命令只收集 Lark Wiki 上下文和 checklist。请由 LLM 完成 claim extraction、跨页更新、source_refs、coverage audit。\n\n'
+  printf '> 本命令只收集 Lark Wiki 上下文和 checklist。请由 LLM 完成 claim extraction、跨页更新、source_refs、coverage audit；除非用户只要求 plan，否则不要只输出 plan 就结束。\n\n'
   _lw_wiki_print_root_context "$space_id" "$root_node" 25000
   _lw_wiki_print_catalog "$space_id" "$root_node"
+  printf '\n# Default Write-Through Flow\n\n'
+  printf 'stage -> compile context pack -> human checkpoint -> write pages -> INDEX/SOURCES/LOG -> structure lint\n\n'
+  printf 'Human checkpoint before mutating cross-page wiki state:\n\n'
+  printf -- '- 5-10 条 key takeaways\n'
+  printf -- '- 可能改变的现有页面\n'
+  printf -- '- 新资料和旧结论的冲突\n'
+  printf -- '- 用户确认 or narrowed emphasis before write pages\n'
+  printf -- '- then write pages, update INDEX/SOURCES/LOG, and run structure lint\n'
   printf '\n# Required Compile Checklist\n\n'
   printf -- '- Read raw/extraction/source page for `%s`.\n' "$source_ref"
   printf -- '- Create or update `wiki/sources/<source>` with YAML frontmatter and `source_refs`.\n'
@@ -2177,6 +2233,13 @@ lw_wiki_lint_plan() {
   printf -- '- long pages that should split\n'
   printf -- '- unresolved `wiki/disputed` claims\n'
   printf -- '- coverage gaps where raw fallback is still needed\n'
+  printf '\n# Required Repair Plan Shape\n\n'
+  printf -- '- observations\n'
+  printf -- '- proposed repairs\n'
+  printf -- '- pages to update\n'
+  printf -- '- refs to add/remove\n'
+  printf -- '- disputes to create/update\n'
+  printf -- '- items requiring human approval\n'
 }
 
 lw_wiki_graph_plan() {
@@ -2725,7 +2788,7 @@ lw_wiki_bootstrap_root() {
   content_commands+=("$(_lw_shell_join _lw_wiki_ensure_standard_children_quiet "$space_id" "$wiki_node" wiki-cat "$root_title" "${LW_WIKI_CATEGORIES[@]}")")
   _lw_wiki_ensure_standard_children_groups_parallel "${content_commands[@]}"
 
-  root_url="$(printf 'https://bytedance.larkoffice.com/wiki/%s' "$root_node")"
+  root_url="$(_lw_wiki_root_url "$root_node" "$target" "$resolved")"
   _lw_wiki_registry_record_parts "$root_url" "$root_title" "$space_id" "$root_node" "$target" || true
   jq -n \
     --arg root_url "$root_url" \
@@ -2788,7 +2851,7 @@ lw_log_entry() {
   local action="$1"
   local page="$2"
   local summary="$3"
-  printf '%s | %s | %s | %s\n' "$(date +%F)" "$action" "$page" "$summary"
+  printf '## [%s] %s | %s\n\n%s\n\n' "$(_lw_now)" "$action" "$page" "$summary"
 }
 
 lw_usage() {
@@ -2864,9 +2927,11 @@ lw_usage() {
 环境变量:
   LARK_WIKI_AS=user|bot   传给 lark-cli 的身份，默认 user。
   LARK_WIKI_DRY_RUN=1     打印原始 API 请求，不执行支持 dry-run 的 Wiki API 写入。
+  LARK_WIKI_BASE_URL=https://tenant.example  仅给 token 时用于生成 root URL；优先使用输入 URL 或 API 返回 URL。
   LARK_WIKI_BOOTSTRAP_PARALLELISM=4  bootstrap 中独立写入的最大并发数。
   LARK_LLM_WIKI_HOME=~/.lark-llm-wiki  最近访问知识库 registry 目录。
   LLM_WIKI_PYTHON=/path/python3  指定本地文件解析使用的 Python。
+  LARK_WIKI_INCLUDE_LOCAL_PATH=1  本地文件抽取页写入脱敏调试路径；默认不写。
   LLM_WIKI_UPLOAD_FOLDER_TOKEN=token  本地文件上传到指定 Lark Drive 文件夹。
 USAGE
 }

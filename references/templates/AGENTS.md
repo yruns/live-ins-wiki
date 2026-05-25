@@ -35,7 +35,8 @@ This Wiki is a Lark/Feishu implementation of a Karpathy-style LLM Wiki. It store
 - `SOURCES.imported_at` is immutable; later state changes update `updated_at`.
 - `INDEX` source rows are upserted by `Source ID`, not appended as duplicates.
 - Before asking the user for a target Wiki, inspect `~/.lark-llm-wiki/registry.json` or run `lw_wiki_registry_current`.
-- A registry `current` Wiki or uniquely matched registry name is an explicit enough target; ambiguous or missing registry entries still require user confirmation.
+- Read-only operations may use registry `current` or a uniquely matched registry name after stating the selected Wiki.
+- Write operations require a root/name/`@current` in the current user request, or an explicit confirmation of the registry current target and planned writes before execution.
 - If the user names a concrete Wiki document node and asks to initialize it, treat that node as the LLM Wiki root and run `wiki-bootstrap-root`; do not create an extra `LLM Wiki` child unless the user explicitly asks for a nested entry.
 - Before bootstrapping a user-specified existing root, verify the root layer is clean. Non-standard children outside `AGENTS.md`, `INDEX`, `LOG`, `SOURCES`, `raw`, and `wiki` require asking the user whether to delete or move them first.
 - 初始化后不要运行 `wiki-health`。Use the lightweight `wiki-structure-lint` by default; only run full health when the user explicitly asks for health or a complete health check.
@@ -104,14 +105,15 @@ Create entity/concept pages only when the item is central to multiple sources, n
 
 1. Read `INDEX`, `SOURCES`, recent `LOG`, and relevant compiled pages.
 2. Read the raw source or extraction page.
-3. Create or update `wiki/sources/<source>`.
-4. Extract atomic claims with claim IDs.
-5. Update relevant `wiki/entities`, `wiki/concepts`, `wiki/comparisons`, `wiki/overviews`, `wiki/decisions`, or `wiki/syntheses`.
-6. Add or update `wiki/disputed` for conflicts.
-7. Run INDEX 目录同步 for every created or updated compiled page, including Concepts, Entities, Comparisons, Overviews, Syntheses, and Audits.
-8. Update the source row in `INDEX`, then update `SOURCES` and `LOG`.
-9. Run `wiki-structure-lint` and require zero structure failures, especially `INDEX` vs real `wiki/*` directory consistency.
-10. Complete a Coverage Audit.
+3. Human checkpoint: summarize 5-10 key takeaways, affected existing pages, conflicts with old claims, and emphasis before mutating cross-page state.
+4. Create or update `wiki/sources/<source>`.
+5. Extract atomic claims with claim IDs.
+6. Update relevant `wiki/entities`, `wiki/concepts`, `wiki/comparisons`, `wiki/overviews`, `wiki/decisions`, or `wiki/syntheses`.
+7. Add or update `wiki/disputed` for conflicts.
+8. Run INDEX 目录同步 for every created or updated compiled page, including Concepts, Entities, Comparisons, Overviews, Syntheses, and Audits.
+9. Update the source row in `INDEX`, then update `SOURCES` and `LOG`.
+10. Run `wiki-structure-lint` and require zero structure failures, especially `INDEX` vs real `wiki/*` directory consistency.
+11. Complete a Coverage Audit.
 
 ## Coverage Audit
 
@@ -132,6 +134,8 @@ Recent roots are stored locally under `~/.lark-llm-wiki/registry.json`. Use `lw_
 Run lightweight `wiki-structure-lint` before semantic work and after initialization. Full `wiki-health` is heavier and reads more Lark nodes/page bodies; only run it when the user explicitly asks for health or a complete health check. Missing YAML/frontmatter or `source_refs` in core compiled pages is a failure, as is `compile_status=compiled` without completed audit metadata.
 
 ## Semantic Lint
+
+Semantic lint must produce observations plus a repair plan: proposed repairs, pages to update, refs to add/remove, disputes to create/update, and items requiring human approval.
 
 Use LLM judgment to find contradictions, stale claims, missing concepts, orphan pages, weak citations, source drift, unresolved disputes, and compilation gaps.
 

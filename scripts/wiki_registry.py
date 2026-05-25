@@ -62,7 +62,7 @@ def save(path: Path, data: dict[str, Any]) -> None:
 
 def normalize_entry(entry: dict[str, Any]) -> dict[str, Any]:
     root_node = str(entry["root_node"])
-    root_url = str(entry.get("root_url") or f"https://bytedance.larkoffice.com/wiki/{root_node}")
+    root_url = str(entry.get("root_url") or root_node)
     return {
         "id": root_node,
         "name": str(entry.get("name") or root_node),

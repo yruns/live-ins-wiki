@@ -47,8 +47,8 @@ metadata:
 
 ## 硬规则
 
-- 不能从聊天历史、示例命令或猜测中隐式选择目标 Wiki。先查 `~/.lark-llm-wiki/registry.json`；如果 registry 有明确 current 或用户给了可唯一解析的名称 / root URL，可以直接使用并在输出里说明选中的 Wiki。若 registry 为空或候选不唯一，再问用户。
-- 新增文档、创建页面、导入来源、移动文档或创建快捷方式前，目标 Wiki 必须来自用户本轮明确指定、registry current、或 registry 中唯一匹配的名称。
+- 不能从聊天历史、示例命令或猜测中隐式选择目标 Wiki。先查 `~/.lark-llm-wiki/registry.json`；读操作如果 registry 有明确 current 或用户给了可唯一解析的名称 / root URL，可以直接使用并在输出里说明选中的 Wiki。若 registry 为空或候选不唯一，再问用户。
+- 写操作更严格：新增文档、创建页面、导入来源、移动文档或创建快捷方式前，目标 Wiki 必须来自用户本轮明确指定的 root/name/`@current`，或 registry 中唯一匹配的名称。如果本轮没有显式写入目标，只能先展示将写入的 registry current、将执行的变更和影响范围，等用户确认后再写。
 - 不能随意创建独立知识库空间。
 - 初始化只有一个操作路径：用户给出具体 Wiki 文档节点并要求初始化时，把该节点作为 LLM Wiki 根节点，运行 `wiki-bootstrap-root`。
 - 如果用户明确把一个已有 Wiki 文档节点指定为知识库根节点，且该节点尚未包含标准结构，用 `wiki-bootstrap-root` 在当前节点下补齐结构；不要再额外创建 `LLM Wiki` 子入口。
@@ -68,6 +68,7 @@ metadata:
 - 事实段落必须有 `source_refs`；冲突写入 `wiki/disputed`，不要静默覆盖。
 - 不把 Lark token、app secret、cookie、auth header、个人凭证或调试密钥写入 Wiki 页面、`SOURCES`、`INDEX` 或 `LOG`；对外总结命令输出前先脱敏。
 - 修改已有 compiled pages 前，先给 mutation plan：来源、要创建的页面、要更新的页面、争议页、`INDEX/SOURCES/LOG` 更新、是否 destructive。
+- Compile / ingest 的目标是实际维护 Wiki，不是停在计划层。除非用户只要求 plan，否则不要只输出 plan 就结束；默认闭环是 `stage -> compile context pack -> human checkpoint -> write pages -> INDEX/SOURCES/LOG -> structure lint`。
 
 ## 标准结构
 
@@ -167,18 +168,21 @@ lw_wiki_query_plan @current "GLUP 是什么"
 
 ## Compile 期望
 
+默认不要只输出 plan 就结束。`wiki-compile-source-plan` 是上下文包，后续必须由 LLM 进入语义维护闭环：先给 Human checkpoint，再在用户确认或无异议继续后 write pages，最后同步 `INDEX` / `SOURCES` / `LOG` 并跑结构检查。
+
 每个来源编译时至少完成：
 
 1. 读 `INDEX`、`SOURCES`、近期 `LOG` 和相关已编译页。
 2. 读 raw source 或 local extraction。
-3. 抽取 key claims、entities、concepts、decisions、conflicts、open questions。
-4. 更新 `wiki/sources/<source>`。
-5. 更新已有实体/概念/综述/对比/决策页；没有达到建页阈值的 mention 留在 source page。
-6. 为事实写 `source_refs`，冲突进入 `wiki/disputed`。
-7. 更新 `INDEX`、`SOURCES`、`LOG`。`INDEX` 的 Sources、Concepts、Entities、Comparisons、Overviews、Syntheses、Audits 必须和本次真实创建/更新的目录页同步。
-8. 做 coverage audit；必要时创建 `wiki/audits/<source-id>-coverage`。
-9. 运行 `scripts/lark_wiki.sh wiki-structure-lint "$LLM_WIKI_ROOT"` 或 `scripts/wiki_structure_lint.sh "$LLM_WIKI_ROOT"`，确认 `INDEX` 与真实 `wiki/*` 目录双向完全一致且没有结构 FAIL。
-10. Coverage audit 和 `wiki-structure-lint` 都通过前，`SOURCES.compile_status` 只能是 `compiled_unverified`，不能标成 `compiled`。
+3. Human checkpoint：给出 5-10 条 key takeaways、可能改变的现有页面、新资料和旧结论的冲突，并让用户确认 emphasis。
+4. 抽取 key claims、entities、concepts、decisions、conflicts、open questions。
+5. 更新 `wiki/sources/<source>`。
+6. 更新已有实体/概念/综述/对比/决策页；没有达到建页阈值的 mention 留在 source page。
+7. 为事实写 `source_refs`，冲突进入 `wiki/disputed`。
+8. 更新 `INDEX`、`SOURCES`、`LOG`。`INDEX` 的 Sources、Concepts、Entities、Comparisons、Overviews、Syntheses、Audits 必须和本次真实创建/更新的目录页同步。
+9. 做 coverage audit；必要时创建 `wiki/audits/<source-id>-coverage`。
+10. 运行 `scripts/lark_wiki.sh wiki-structure-lint "$LLM_WIKI_ROOT"` 或 `scripts/wiki_structure_lint.sh "$LLM_WIKI_ROOT"`，确认 `INDEX` 与真实 `wiki/*` 目录双向完全一致且没有结构 FAIL。
+11. Coverage audit 和 `wiki-structure-lint` 都通过前，`SOURCES.compile_status` 只能是 `compiled_unverified`，不能标成 `compiled`。
 
 具体 checklist 见 `references/workflows.md`。
 
@@ -202,6 +206,6 @@ lw_wiki_query_plan @current "GLUP 是什么"
 python3 -m unittest tests/test_static_contract.py
 for f in scripts/lark_wiki.sh scripts/wiki_structure_lint.sh; do bash -n "$f"; done
 python3 -m py_compile scripts/extract_local_file.py scripts/manifest_upsert.py scripts/source_id_next.py scripts/index_upsert.py scripts/wiki_registry.py scripts/manifest_find.py scripts/manifest_lint.py scripts/lark_markdown.py
-python3 /Users/bytedance/.codex/skills/.system/skill-creator/scripts/quick_validate.py .
-python3 /Users/bytedance/.codex/skills/.system/skill-creator/scripts/quick_validate.py /Users/bytedance/.codex/skills/llm-wiki-lark
+python3 "${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-creator/scripts/quick_validate.py" .
+python3 "${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-creator/scripts/quick_validate.py" "${CODEX_HOME:-$HOME/.codex}/skills/llm-wiki-lark"
 ```

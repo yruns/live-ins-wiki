@@ -857,6 +857,33 @@ print(",".join(embedded_sheet_tokens('before <sheet token="sht123"></sheet> midd
         self.assertIn("missing real page", script)
         self.assertIn("stale page", script)
 
+    def test_compile_contract_requires_human_checkpoint_and_write_through(self) -> None:
+        skill = read("SKILL.md")
+        workflows = read("references/workflows.md")
+        script = read("scripts/lark_wiki.sh")
+        combined = "\n".join([skill, workflows, script])
+        self.assertIn("不要只输出 plan 就结束", combined)
+        self.assertIn("Human checkpoint", combined)
+        self.assertIn("5-10 条 key takeaways", combined)
+        self.assertIn("可能改变的现有页面", combined)
+        self.assertIn("用户确认", combined)
+        self.assertIn("write pages", combined)
+        self.assertIn(
+            "stage -> compile context pack -> human checkpoint -> write pages -> INDEX/SOURCES/LOG -> structure lint",
+            combined,
+        )
+
+    def test_semantic_lint_outputs_repair_plan_not_only_report(self) -> None:
+        skill = read("SKILL.md")
+        workflows = read("references/workflows.md")
+        script = read("scripts/lark_wiki.sh")
+        combined = "\n".join([skill, workflows, script])
+        self.assertIn("proposed repairs", combined)
+        self.assertIn("pages to update", combined)
+        self.assertIn("refs to add/remove", combined)
+        self.assertIn("disputes to create/update", combined)
+        self.assertIn("items requiring human approval", combined)
+
     def test_structure_lint_is_split_from_full_health(self) -> None:
         script = read("scripts/lark_wiki.sh")
         wrapper = read("scripts/wiki_structure_lint.sh")
@@ -877,6 +904,96 @@ print(",".join(embedded_sheet_tokens('before <sheet token="sht123"></sheet> midd
         self.assertIn('local last_updated="${5:-$(_lw_now)}"', script)
         self.assertIn('--arg last_updated "$(_lw_now)"', script)
         self.assertIn('--last-updated "$(_lw_now)"', script)
+
+    def test_no_machine_specific_defaults_in_runtime_files(self) -> None:
+        runtime_files = [
+            "SKILL.md",
+            "README.md",
+            "references/workflows.md",
+            "references/schema.md",
+            "scripts/lark_wiki.sh",
+            "scripts/wiki_registry.py",
+        ]
+        for rel in runtime_files:
+            with self.subTest(file=rel):
+                text = read(rel)
+                self.assertNotIn("https://bytedance.larkoffice.com/wiki/", text)
+                self.assertNotIn("/Users/bytedance/", text)
+
+    def test_wiki_root_url_derives_from_input_or_env(self) -> None:
+        command = r'''
+source scripts/lark_wiki.sh
+_lw_wiki_root_url rootA 'https://tenant.larksuite.com/wiki/original' '{}'
+LARK_WIKI_BASE_URL='https://tenant.feishu.cn' _lw_wiki_root_url rootB token '{}'
+_lw_wiki_root_url rootC token '{"data":{"node":{"url":"https://tenant.larkoffice.com/wiki/old"}}}'
+_lw_wiki_root_url rootD token '{}'
+'''
+        result = subprocess.run(
+            ["bash", "-lc", command],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        self.assertEqual(
+            result.stdout.splitlines(),
+            [
+                "https://tenant.larksuite.com/wiki/rootA",
+                "https://tenant.feishu.cn/wiki/rootB",
+                "https://tenant.larkoffice.com/wiki/rootC",
+                "rootD",
+            ],
+        )
+
+    def test_log_entry_helper_uses_stable_timestamped_heading(self) -> None:
+        command = r'''
+source scripts/lark_wiki.sh
+lw_log_entry compile wiki/sources/source-a 'Updated source page and concepts.'
+'''
+        result = subprocess.run(
+            ["bash", "-lc", command],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        self.assertRegex(
+            result.stdout,
+            r"^## \[20\d\d-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d\] compile \| wiki/sources/source-a\n\nUpdated source page and concepts\.\n\n$",
+        )
+
+    def test_extract_local_file_does_not_leak_absolute_path_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            sample = Path(tmp) / "sample.txt"
+            sample.write_text("hello wiki\n", encoding="utf-8")
+            result = subprocess.run(
+                ["python3", "scripts/extract_local_file.py", str(sample)],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+        self.assertIn("- original_filename: sample.txt", result.stdout)
+        self.assertIn("- sha256_file: sha256:", result.stdout)
+        self.assertIn("- sha256_extracted_text: sha256:", result.stdout)
+        self.assertIn("- extraction_completeness: text_only", result.stdout)
+        self.assertIn("- missing_modalities:", result.stdout)
+        self.assertNotIn("local_path:", result.stdout)
+        self.assertNotIn(str(sample), result.stdout)
+
+    def test_extract_local_file_can_include_redacted_local_path_for_debug(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            sample = Path(tmp) / "debug.txt"
+            sample.write_text("debug\n", encoding="utf-8")
+            result = subprocess.run(
+                ["python3", "scripts/extract_local_file.py", "--include-local-path", str(sample)],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+        self.assertIn("- local_path:", result.stdout)
+        self.assertIn("debug.txt", result.stdout)
 
     def test_initialization_uses_only_bootstrap_path(self) -> None:
         script = read("scripts/lark_wiki.sh")

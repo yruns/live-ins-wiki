@@ -190,6 +190,7 @@ Passing mention 不建页，放在 source page 的 `Mentioned but not tracked`�
 - Lark node URL 是物理链接；slug 是逻辑链接。
 - `LOG` 使用稳定小节格式。
 - `INDEX` 和 `SOURCES` 的主形态是 Feishu spreadsheet；新建或重建 Wiki 必须使用 sheet，每个主表使用独立 sheet，便于 agent 精准读写。
+- 同步维护 `INDEX.md` / `SOURCES.md` export mirror 或等价 Markdown 导出视图，用于人类阅读、grep、迁移和审查；sheet 是 machine-writable canonical state，Markdown mirror 是 portable view。
 - 兼容旧 Wiki 时，`INDEX`、`SOURCES` 可以使用稳定 Markdown 表格；脚本读取前必须 normalize Lark table export。
 
 ## INDEX Catalog

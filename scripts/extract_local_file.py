@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import html
 import json
 import os
@@ -43,23 +44,67 @@ def trim(text: str, max_chars: int) -> str:
     return text[:max_chars].rstrip() + f"\n\n> 已截断，剩余 {omitted} 个字符未写入。"
 
 
-def markdown_header(path: Path, kind: str) -> str:
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return "sha256:" + digest.hexdigest()
+
+
+def sha256_text(text: str) -> str:
+    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def redact_local_path(path: Path) -> str:
+    home = Path.home().resolve()
+    try:
+        return "~/" + str(path.resolve().relative_to(home))
+    except ValueError:
+        return str(path)
+
+
+def extraction_profile(kind: str) -> tuple[str, str]:
+    if kind in {"csv", "tsv", "xlsx"}:
+        return "text_plus_tables", "images, charts, comments, formulas"
+    if kind == "pdf":
+        return "text_only", "images, charts, annotations, scanned_pages_without_ocr"
+    if kind == "pptx":
+        return "text_only", "images, charts, speaker_notes, embedded_objects"
+    if kind == "docx":
+        return "text_only", "images, charts, comments, footnotes, embedded_objects"
+    if kind in {"doc", "ppt"}:
+        return "text_only", "images, charts, comments, speaker_notes, embedded_objects"
+    return "text_only", "none_detected"
+
+
+def markdown_header(path: Path, kind: str, extracted_text: str, include_local_path: bool) -> str:
     stat = path.stat()
-    return "\n".join(
+    completeness, missing = extraction_profile(kind)
+    lines = [
+        f"# {path.name}",
+        "",
+        "## 本地抽取元数据",
+        "",
+        "- source_type: local_file",
+        f"- original_filename: {path.name}",
+        f"- file_type: {kind}",
+        f"- size_bytes: {stat.st_size}",
+        f"- sha256_file: {sha256_file(path)}",
+        f"- sha256_extracted_text: {sha256_text(extracted_text)}",
+        f"- extraction_completeness: {completeness}",
+        f"- missing_modalities: {missing}",
+    ]
+    if include_local_path:
+        lines.append(f"- local_path: {redact_local_path(path)}")
+    lines.extend(
         [
-            f"# {path.name}",
-            "",
-            "## 本地抽取元数据",
-            "",
-            f"- source_type: local_file",
-            f"- file_type: {kind}",
-            f"- local_path: {path}",
-            f"- size_bytes: {stat.st_size}",
-            f"- extracted_at: {datetime.now().isoformat(timespec='seconds')}",
-            f"- extractor: scripts/extract_local_file.py",
+            f"- extracted_at: {datetime.now().astimezone().isoformat(timespec='seconds')}",
+            "- extractor: scripts/extract_local_file.py",
             "",
         ]
     )
+    return "\n".join(lines)
 
 
 def csv_to_markdown(path: Path, max_rows: int) -> str:
@@ -231,6 +276,7 @@ def main() -> int:
     parser.add_argument("-o", "--output", type=Path)
     parser.add_argument("--max-rows", type=int, default=200)
     parser.add_argument("--max-chars", type=int, default=200_000)
+    parser.add_argument("--include-local-path", action="store_true", help="写入脱敏后的本机路径，仅用于本地调试")
     args = parser.parse_args()
 
     path = args.file.expanduser().resolve()
@@ -242,7 +288,8 @@ def main() -> int:
         return 2
 
     kind, body = extract_body(path, args.max_rows)
-    markdown = markdown_header(path, kind) + trim(body.strip(), args.max_chars) + "\n"
+    body = body.strip()
+    markdown = markdown_header(path, kind, body, args.include_local_path) + trim(body, args.max_chars) + "\n"
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(markdown, encoding="utf-8")
