@@ -47,6 +47,10 @@ def parse_frontmatter(rel: str) -> dict:
     return data
 
 
+def line_count(rel: str) -> int:
+    return len(read(rel).splitlines())
+
+
 class StaticContractTest(unittest.TestCase):
     def test_no_collapsed_or_extreme_lines(self) -> None:
         for path in ROOT.rglob("*"):
@@ -746,16 +750,20 @@ print(",".join(embedded_sheet_tokens('before <sheet token="sht123"></sheet> midd
             "wiki/disputed",
             "wiki/audits",
         ]
-        texts = {
-            "SKILL.md": read("SKILL.md"),
-            "references/schema.md": read("references/schema.md"),
-            "references/workflows.md": read("references/workflows.md"),
-        }
-        for name, text in texts.items():
-            with self.subTest(file=name):
-                for item in expected:
-                    self.assertTrue(mentions_path(text, item), item)
-                self.assertNotIn("raw/requirements", text)
+        combined = "\n".join(
+            [
+                read("references/schema.md"),
+                read("references/workflows/init-bootstrap.md"),
+                read("references/workflows/stage-import.md"),
+                read("references/workflows/compile.md"),
+                read("references/workflows/query-writeback.md"),
+                read("references/workflows/lint-audit-drift.md"),
+            ]
+        )
+        for item in expected:
+            with self.subTest(path=item):
+                self.assertTrue(mentions_path(combined, item), item)
+        self.assertNotIn("raw/requirements", combined)
 
     def test_schema_uses_structured_frontmatter_not_blockquote_metadata(self) -> None:
         schema = read("references/schema.md")
@@ -836,7 +844,12 @@ print(",".join(embedded_sheet_tokens('before <sheet token="sht123"></sheet> midd
 
     def test_compile_contract_requires_full_index_sync(self) -> None:
         skill = read("SKILL.md")
-        workflows = read("references/workflows.md")
+        workflows = "\n".join(
+            [
+                read("references/workflows/compile.md"),
+                read("references/workflows/lint-audit-drift.md"),
+            ]
+        )
         agents = read("references/templates/AGENTS.md")
         combined = "\n".join([skill, workflows, agents])
         self.assertIn("lw_wiki_index_upsert_page", script := read("scripts/lark_wiki.sh"))
@@ -859,7 +872,7 @@ print(",".join(embedded_sheet_tokens('before <sheet token="sht123"></sheet> midd
 
     def test_compile_contract_requires_human_checkpoint_and_write_through(self) -> None:
         skill = read("SKILL.md")
-        workflows = read("references/workflows.md")
+        workflows = read("references/workflows/compile.md")
         script = read("scripts/lark_wiki.sh")
         combined = "\n".join([skill, workflows, script])
         self.assertIn("不要只输出 plan 就结束", combined)
@@ -875,7 +888,7 @@ print(",".join(embedded_sheet_tokens('before <sheet token="sht123"></sheet> midd
 
     def test_semantic_lint_outputs_repair_plan_not_only_report(self) -> None:
         skill = read("SKILL.md")
-        workflows = read("references/workflows.md")
+        workflows = read("references/workflows/lint-audit-drift.md")
         script = read("scripts/lark_wiki.sh")
         combined = "\n".join([skill, workflows, script])
         self.assertIn("proposed repairs", combined)
@@ -888,7 +901,7 @@ print(",".join(embedded_sheet_tokens('before <sheet token="sht123"></sheet> midd
         script = read("scripts/lark_wiki.sh")
         wrapper = read("scripts/wiki_structure_lint.sh")
         skill = read("SKILL.md")
-        workflows = read("references/workflows.md")
+        workflows = read("references/workflows/lint-audit-drift.md")
         combined = "\n".join([skill, workflows])
         self.assertIn("lw_wiki_structure_lint", script)
         self.assertIn("wiki-structure-lint", script)
@@ -909,8 +922,12 @@ print(",".join(embedded_sheet_tokens('before <sheet token="sht123"></sheet> midd
         runtime_files = [
             "SKILL.md",
             "README.md",
-            "references/workflows.md",
             "references/schema.md",
+            "references/workflows/init-bootstrap.md",
+            "references/workflows/stage-import.md",
+            "references/workflows/compile.md",
+            "references/workflows/query-writeback.md",
+            "references/workflows/lint-audit-drift.md",
             "scripts/lark_wiki.sh",
             "scripts/wiki_registry.py",
         ]
@@ -998,7 +1015,7 @@ lw_log_entry compile wiki/sources/source-a 'Updated source page and concepts.'
     def test_initialization_uses_only_bootstrap_path(self) -> None:
         script = read("scripts/lark_wiki.sh")
         skill = read("SKILL.md")
-        workflows = read("references/workflows.md")
+        workflows = read("references/workflows/init-bootstrap.md")
         readme = read("README.md")
         combined = "\n".join([skill, workflows, readme])
         self.assertIn("_lw_sheet_init_index", script)
@@ -1014,7 +1031,7 @@ lw_log_entry compile wiki/sources/source-a 'Updated source page and concepts.'
 
     def test_initialization_docs_forbid_implicit_health(self) -> None:
         skill = read("SKILL.md")
-        workflows = read("references/workflows.md")
+        workflows = read("references/workflows/init-bootstrap.md")
         agents = read("references/templates/AGENTS.md")
         combined = "\n".join([skill, workflows, agents])
         self.assertIn("初始化后不要运行 `wiki-health`", combined)
@@ -1103,7 +1120,7 @@ exit "$status"
 
     def test_bootstrap_requires_clean_root_before_creation(self) -> None:
         script = read("scripts/lark_wiki.sh")
-        workflows = read("references/workflows.md")
+        workflows = read("references/workflows/init-bootstrap.md")
         self.assertIn("_lw_wiki_assert_clean_bootstrap_root", script)
         self.assertIn('LLM Wiki 根节点不是干净目录', script)
         self.assertIn('请先询问用户是否删除或移动这些文档', script)
@@ -1117,6 +1134,42 @@ exit "$status"
         self.assertIn("非标准子节点", workflows)
         self.assertIn("询问用户是否删除或移动", workflows)
         self.assertIn("不要默认运行完整 `wiki-health`", workflows)
+
+    def test_skill_is_short_entrypoint_with_reference_navigation(self) -> None:
+        skill = read("SKILL.md")
+        self.assertLessEqual(line_count("SKILL.md"), 120)
+        self.assertIn("Progressive disclosure", skill)
+        self.assertIn("references/karpathy-principles.md", skill)
+        self.assertIn("references/schema.md", skill)
+        self.assertIn("references/workflows/init-bootstrap.md", skill)
+        self.assertIn("references/workflows/stage-import.md", skill)
+        self.assertIn("references/workflows/compile.md", skill)
+        self.assertIn("references/workflows/query-writeback.md", skill)
+        self.assertIn("references/workflows/lint-audit-drift.md", skill)
+        self.assertNotIn("## Compile 期望", skill)
+        self.assertNotIn("## Query 期望", skill)
+        self.assertNotIn("## 标准结构", skill)
+
+    def test_reference_files_are_split_and_karpathy_aligned(self) -> None:
+        required = [
+            "references/karpathy-principles.md",
+            "references/schema.md",
+            "references/workflows/init-bootstrap.md",
+            "references/workflows/stage-import.md",
+            "references/workflows/compile.md",
+            "references/workflows/query-writeback.md",
+            "references/workflows/lint-audit-drift.md",
+        ]
+        for rel in required:
+            with self.subTest(reference=rel):
+                path = ROOT / rel
+                self.assertTrue(path.exists(), rel)
+                text = read(rel)
+                self.assertIn("Karpathy", text)
+                self.assertIn("## When to read", text)
+                self.assertIn("## Workflow", text)
+        self.assertNotIn("## Compile", read("references/workflows.md"))
+        self.assertIn("see `references/workflows/compile.md`", read("references/workflows.md"))
 
 
 if __name__ == "__main__":

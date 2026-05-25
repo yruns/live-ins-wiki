@@ -26,6 +26,16 @@ scripts/lark_wiki.sh wiki-structure-lint "$LLM_WIKI_ROOT"
 scripts/lark_wiki.sh wiki-registry-current
 ```
 
+`SKILL.md` is intentionally short. Detailed guidance is split by task:
+
+- `references/karpathy-principles.md`
+- `references/schema.md`
+- `references/workflows/init-bootstrap.md`
+- `references/workflows/stage-import.md`
+- `references/workflows/compile.md`
+- `references/workflows/query-writeback.md`
+- `references/workflows/lint-audit-drift.md`
+
 最近访问的 Lark LLM Wiki 会记录到 `~/.lark-llm-wiki/registry.json`。后续请求可以用 `@current` 或 registry 中的 Wiki 名称作为 root selector。
 
 ## Safety

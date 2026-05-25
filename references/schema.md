@@ -1,6 +1,24 @@
 # Lark LLM Wiki Schema
 
-这个 schema 描述 Lark-native LLM Wiki 的默认目录、页面类型、元数据、引用和建页规则。目标 Wiki 初始化后，应把这些规则写入目标 Wiki 的 `AGENTS.md`，让它成为该 Wiki 的 runtime schema。
+这个 schema 描述 Lark-native Karpathy-style LLM Wiki 的默认目录、页面类型、元数据、引用和建页规则。目标 Wiki 初始化后，应把这些规则写入目标 Wiki 的 `AGENTS.md`，让它成为该 Wiki 的 runtime schema。
+
+## When to read
+
+Read this when you need the node tree, page types, YAML frontmatter, `SOURCES`,
+`INDEX`, link rules, page-creation thresholds, or graph/backlink contracts.
+Workflows live in `references/workflows/`; this file is the structural contract
+those workflows write against.
+
+## Workflow
+
+1. Verify the target Wiki has the standard real Lark node tree.
+2. Validate any generated `wiki/` page against the YAML frontmatter contract.
+3. Keep `SOURCES` as the provenance manifest and `INDEX` as the navigation
+   catalog.
+4. Preserve Karpathy's separation: `raw/` is immutable source material, `wiki/`
+   is compiled human-readable knowledge.
+5. Use stable slugs, aliases, `source_refs`, and backlinks so the Wiki compounds
+   as a graph rather than a pile of summaries.
 
 ## 节点树
 
